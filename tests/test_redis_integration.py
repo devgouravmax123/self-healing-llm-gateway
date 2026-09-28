@@ -1,5 +1,6 @@
 """Integration tests for live local Redis (run when Redis daemon is reachable at localhost:6379)."""
 
+import asyncio
 import socket
 from typing import Any
 
@@ -74,7 +75,21 @@ async def test_live_redis_circuit_lifecycle(live_redis_client: Any) -> None:
     assert allowed_blocked is False
     assert state_open == CircuitState.OPEN
 
-    # 4. Successful recovery after probe
+    # 4. Wait for cooldown expiration (1.0s) and transition to HALF_OPEN
+    await asyncio.sleep(1.1)
+
+    allowed_probe, probe_state, _ = await storage.acquire_permission(
+        provider_id,
+        cooldown_seconds=1.0,
+        max_probes=1,
+    )
+    assert allowed_probe is True
+    assert probe_state == CircuitState.HALF_OPEN
+
+    # 5. Successful probe recovers the circuit back to CLOSED
     await storage.record_success(provider_id)
-    state_after_success = await storage.get_state(provider_id, cooldown_seconds=1.0)
+    state_after_success = await storage.get_state(
+        provider_id,
+        cooldown_seconds=1.0,
+    )
     assert state_after_success == CircuitState.CLOSED
