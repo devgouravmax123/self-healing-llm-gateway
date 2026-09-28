@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import random
+import time
 from collections.abc import Awaitable, Callable
 
 from app.core.config import Settings, settings
@@ -11,6 +12,7 @@ from app.models.provider import ProviderTarget
 from app.models.requests import ChatCompletionRequest
 from app.models.responses import ChatCompletionResponse
 from app.providers.litellm_client import LiteLLMService, litellm_service
+from app.reliability.health_tracker import HealthTracker, health_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -23,10 +25,12 @@ class RetryManager:
         config: Settings | None = None,
         provider_service: LiteLLMService | None = None,
         sleep_func: Callable[[float], Awaitable[None]] | None = None,
+        tracker: HealthTracker | None = None,
     ) -> None:
         self.config = config or settings
         self.provider_service = provider_service or litellm_service
         self._sleep = sleep_func or asyncio.sleep
+        self.health_tracker = tracker or health_tracker
 
     def calculate_backoff(self, attempt: int) -> float:
         """Calculate backoff delay for a given attempt index (0-indexed).
@@ -69,6 +73,7 @@ class RetryManager:
 
         for attempt in range(total_attempts):
             attempt_number = attempt + 1
+            t0 = time.perf_counter()
             try:
                 logger.debug(
                     "Executing provider call: request_id=%s, provider=%s, model=%s, attempt=%d/%d",
@@ -78,12 +83,41 @@ class RetryManager:
                     attempt_number,
                     total_attempts,
                 )
-                return await self.provider_service.execute_chat_completion(
+                response = await self.provider_service.execute_chat_completion(
                     request=request,
                     request_id=request_id,
                     target=target,
                 )
+                latency_ms = (time.perf_counter() - t0) * 1000.0
+                try:
+                    await self.health_tracker.record_attempt(
+                        provider_id=target.id,
+                        success=True,
+                        latency_ms=latency_ms,
+                    )
+                except Exception as tracker_exc:
+                    logger.warning(
+                        "Health tracking failed on success for provider=%s: %s",
+                        target.id,
+                        tracker_exc,
+                    )
+                return response
             except ProviderError as exc:
+                latency_ms = (time.perf_counter() - t0) * 1000.0
+                try:
+                    await self.health_tracker.record_attempt(
+                        provider_id=target.id,
+                        success=False,
+                        latency_ms=latency_ms,
+                        error_category=exc.category,
+                    )
+                except Exception as tracker_exc:
+                    logger.warning(
+                        "Health tracking failed on error for provider=%s: %s",
+                        target.id,
+                        tracker_exc,
+                    )
+
                 last_error = exc
                 logger.warning(
                     "Provider attempt failed: request_id=%s, provider=%s, attempt=%d/%d, "

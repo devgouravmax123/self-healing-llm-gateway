@@ -1,5 +1,7 @@
 """Pydantic response schemas for the LLM gateway."""
 
+from __future__ import annotations
+
 import time
 from typing import Literal
 
@@ -54,3 +56,21 @@ class ReadyResponse(BaseModel):
     status: str
     ready: bool
     details: dict[str, str] = Field(default_factory=dict)
+
+
+class ProviderHealthSnapshot(BaseModel):
+    """Operational health metrics and state snapshot for an upstream LLM provider."""
+
+    provider_id: str
+    total_requests: int = 0
+    total_successes: int = 0
+    total_failures: int = 0
+    success_rate: float = 0.0
+    last_latency_ms: float | None = None
+    latency_p50_ms: float | None = None
+    latency_p95_ms: float | None = None
+    latency_p99_ms: float | None = None
+    last_success_at: float | None = None
+    last_failure_at: float | None = None
+    last_error_category: str | None = None
+    circuit_state: str = "CLOSED"

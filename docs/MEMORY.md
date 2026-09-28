@@ -2314,5 +2314,30 @@ Key deliverables implemented:
 * Maintained full backwards compatibility across the entire test suite (76 tests collected, 75 passed, 1 skipped when local Redis daemon is offline).
 * Verified live end-to-end LLM inference against local Ollama `qwen2.5:3b`.
 
+---
+
+# 41. Phase 10 — Provider Health Tracking Status
+
+Phase 10 completed successfully.
+
+Key deliverables implemented:
+* Created `HealthStateStorage` protocol and storage implementations (`RedisHealthStorage`, `InMemoryHealthStorage`) in `app/storage/health_storage.py`.
+* Implemented atomic multi-worker Lua script `LUA_RECORD_HEALTH` handling:
+  1. Increment `total_requests`.
+  2. Increment either `total_successes` or `total_failures`.
+  3. Update `last_success_at` or `last_failure_at` with epoch timestamp (`time.time()`).
+  4. Update `last_error_category` on failure.
+  5. Update `last_latency_ms`.
+  6. `LPUSH` latency sample to list `llm_gateway:health:{provider_id}:latencies`.
+  7. `LTRIM` to rolling window size (`LATENCY_WINDOW_SIZE = 50`).
+  8. Refresh TTL on both Redis keys (`HEALTH_TTL_SECONDS = 604800` / 7 days).
+* Created `HealthTracker` service in `app/reliability/health_tracker.py` with dynamic nearest-rank percentile computation ($p50, p95, p99$) and safe success rate calculations ($total\_successes / total\_requests$).
+* Established strict per-attempt measurement boundary in `RetryManager.execute_with_retry` (`app/reliability/retry.py`) recording every physical provider attempt around `execute_chat_completion` with `time.perf_counter()`.
+* Added observational API endpoint `GET /health/providers` in `app/api/routes_health.py` returning `ProviderHealthSnapshot` models for all configured providers without mutating routing or triggering upstream calls.
+* Maintained strict separation: Health tracking is MEASUREMENT only, Circuit Breaker is ENFORCEMENT. Health tracking never opens/closes circuits or modifies routing decisions.
+* Ensured fail-safe resilience: Redis health write failures fall back to process-local in-memory storage, log structured warnings, and NEVER mask or replace upstream provider completion results or errors.
+* Added unit test suite `tests/test_health_tracker.py` (16 tests) and live Redis integration test suite `tests/test_health_integration.py` (6 tests). All 100 tests passing with 0 skips and clean lint/format/mypy gates.
+
+
 
 
