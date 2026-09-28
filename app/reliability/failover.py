@@ -1,0 +1,180 @@
+"""Failover orchestrator for resilient multi-provider LLM execution."""
+
+import logging
+
+from app.core.config import Settings, settings
+from app.core.exceptions import CircuitBreakerError, ProviderError
+from app.models.provider import ProviderTarget
+from app.models.requests import ChatCompletionRequest
+from app.models.responses import ChatCompletionResponse
+from app.reliability.circuit_breaker import CircuitBreakerManager, circuit_breaker_manager
+from app.reliability.error_classifier import ErrorCategory
+from app.reliability.retry import RetryManager, retry_manager
+from app.routing.router import NoHealthyProviderError, Router
+from app.routing.router import router as default_router
+
+logger = logging.getLogger(__name__)
+
+# Categories of provider errors that permit attempting failover to a different provider
+FAILOVER_ELIGIBLE_CATEGORIES: set[ErrorCategory] = {
+    ErrorCategory.TIMEOUT,
+    ErrorCategory.CONNECTION_ERROR,
+    ErrorCategory.RATE_LIMITED,
+    ErrorCategory.SERVER_ERROR,
+    ErrorCategory.UPSTREAM_ERROR,
+}
+
+
+class FailoverManager:
+    """Orchestrates multi-provider failover with circuit breaker and retry integration."""
+
+    def __init__(
+        self,
+        config: Settings | None = None,
+        router_instance: Router | None = None,
+        retry_instance: RetryManager | None = None,
+        circuit_instance: CircuitBreakerManager | None = None,
+    ) -> None:
+        self.config = config or settings
+        self.router = router_instance or default_router
+        self.retry_manager = retry_instance or retry_manager
+        self.circuit_manager = circuit_instance or circuit_breaker_manager
+
+    def is_failover_eligible(self, error: Exception) -> bool:
+        """Determine if an error is eligible to trigger failover to another provider."""
+        # CircuitBreakerError (e.g. OPEN or probe busy) is eligible for failover to another provider
+        if isinstance(error, CircuitBreakerError):
+            return True
+
+        if isinstance(error, ProviderError) and error.category:
+            try:
+                cat = ErrorCategory(error.category)
+                return cat in FAILOVER_ELIGIBLE_CATEGORIES
+            except ValueError:
+                return False
+
+        return False
+
+    async def execute_with_failover(
+        self,
+        request: ChatCompletionRequest,
+        request_id: str,
+    ) -> ChatCompletionResponse:
+        """Execute chat completion with automatic provider failover.
+
+        Execution flow per attempted provider:
+        1. Select eligible ProviderTarget (excluding already attempted & OPEN circuits).
+        2. Acquire permission from the circuit breaker for that provider.
+        3. Execute provider call bounded by RetryManager (retries on the SAME provider).
+        4. If provider execution succeeds:
+           - Record success in the provider's circuit breaker.
+           - Return the successful OpenAI-compatible response.
+        5. If provider execution fails:
+           - Record 1 failure event in that provider's circuit breaker.
+           - Check failover eligibility (client errors like BAD_REQUEST/AUTH_ERROR halt).
+           - Exclude failed provider and select next candidate if under limit.
+        6. If all candidates exhausted, raise final error (or NoHealthyProviderError).
+        """
+        attempted_provider_ids: set[str] = set()
+        max_providers = self.config.max_failover_providers
+        last_exception: Exception | None = None
+
+        while len(attempted_provider_ids) < max_providers:
+            # 1. Select next eligible provider target
+            try:
+                target: ProviderTarget = self.router.select_provider(
+                    request=request,
+                    exclude_provider_ids=attempted_provider_ids,
+                    check_circuit=False,
+                )
+            except NoHealthyProviderError as exc:
+                logger.warning(
+                    "No further eligible providers available for request_id=%s (attempted: %s)",
+                    request_id,
+                    attempted_provider_ids,
+                )
+                if last_exception is not None:
+                    # Re-raise the concrete underlying failure if one occurred during failover
+                    raise last_exception from exc
+                raise exc
+
+            # Mark provider as attempted for this request
+            attempted_provider_ids.add(target.id)
+            current_failover_step = len(attempted_provider_ids)
+
+            logger.info(
+                "Attempting provider '%s' (model='%s') for request_id=%s (provider %d/%d)",
+                target.id,
+                target.model,
+                request_id,
+                current_failover_step,
+                max_providers,
+            )
+
+            # 2. Acquire permission from circuit breaker
+            try:
+                await self.circuit_manager.acquire_permission(target.id)
+            except CircuitBreakerError as cb_exc:
+                logger.warning(
+                    "Circuit breaker blocked provider '%s' for request_id=%s: %s",
+                    target.id,
+                    request_id,
+                    cb_exc.message,
+                )
+                last_exception = cb_exc
+                # Try next eligible provider immediately without calling LiteLLM or RetryManager
+                continue
+
+            # 3. Execute with retries on this target
+            try:
+                response = await self.retry_manager.execute_with_retry(
+                    request=request,
+                    request_id=request_id,
+                    target=target,
+                )
+                # 4. Success -> notify circuit breaker and return response
+                await self.circuit_manager.record_success(target.id)
+                logger.info(
+                    "Request succeeded via provider '%s' for request_id=%s",
+                    target.id,
+                    request_id,
+                )
+                return response
+
+            except Exception as exc:
+                last_exception = exc
+                # Record exactly one circuit failure event for this provider execution
+                await self.circuit_manager.record_failure(target.id, exc)
+
+                # Check failover eligibility
+                if not self.is_failover_eligible(exc):
+                    logger.info(
+                        "Error is not failover-eligible (%s). Halting failover for request_id=%s",
+                        type(exc).__name__,
+                        request_id,
+                    )
+                    raise exc
+
+                logger.warning(
+                    "Provider '%s' exhausted retry policy and failed for request_id=%s. "
+                    "Initiating failover...",
+                    target.id,
+                    request_id,
+                )
+
+        # Reached max failover provider limit
+        logger.error(
+            "Max failover provider limit reached (%d providers attempted: %s) for request_id=%s",
+            max_providers,
+            attempted_provider_ids,
+            request_id,
+        )
+        if last_exception is not None:
+            raise last_exception
+        raise NoHealthyProviderError(
+            f"All {max_providers} attempted LLM providers failed to serve the request."
+        )
+
+
+# Global failover manager instance
+failover_manager = FailoverManager()
