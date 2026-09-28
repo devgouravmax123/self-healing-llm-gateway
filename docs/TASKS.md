@@ -754,31 +754,19 @@ Move shared operational state from process memory to Redis.
 
 
 
-\## Tasks
+## Tasks
 
-
-
-\* \[ ] Add Redis dependency.
-
-\* \[ ] Create Redis connection module.
-
-\* \[ ] Add configuration for Redis URL.
-
-\* \[ ] Store circuit state in Redis.
-
-\* \[ ] Store failure counters in Redis.
-
-\* \[ ] Store rate-limit counters in Redis.
-
-\* \[ ] Implement Redis key conventions.
-
-\* \[ ] Add TTLs where appropriate.
-
-\* \[ ] Handle Redis connection failures.
-
-\* \[ ] Consider concurrency/atomicity for state changes.
-
-\* \[ ] Add Redis integration tests.
+* [x] Add Redis dependency.
+* [x] Create Redis connection module.
+* [x] Add configuration for Redis URL.
+* [x] Store circuit state in Redis.
+* [x] Store failure counters in Redis.
+* [ ] Store rate-limit counters in Redis. (Scheduled for Phase 13)
+* [x] Implement Redis key conventions (`llm_gateway:circuit:{provider_id}`).
+* [x] Add TTLs where appropriate.
+* [x] Handle Redis connection failures with graceful in-memory fallback.
+* [x] Consider concurrency/atomicity for state changes (atomic Lua scripts).
+* [x] Add Redis unit and integration tests.
 
 
 

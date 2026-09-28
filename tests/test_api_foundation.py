@@ -38,13 +38,13 @@ async def test_health_endpoint() -> None:
 
 @pytest.mark.asyncio
 async def test_ready_endpoint() -> None:
-    """Verify that GET /ready returns status ready."""
+    """Verify that GET /ready returns status ready or degraded with ready=True."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/ready")
         assert response.status_code == 200
         data = response.json()
-        assert data["status"] == "ready"
+        assert data["status"] in ("ready", "degraded")
         assert data["ready"] is True
 
 

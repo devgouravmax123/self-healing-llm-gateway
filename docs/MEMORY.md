@@ -2296,5 +2296,23 @@ Key deliverables implemented:
 * Added comprehensive unit and integration test suite in `tests/test_failover.py` (69/69 tests passing across entire test suite).
 * Verified live end-to-end inference against local Ollama `qwen2.5:3b` without requiring paid external APIs.
 
+---
+
+# 40. Phase 09 — Redis Operational State Status
+
+Phase 09 completed successfully.
+
+Key deliverables implemented:
+* Created async Redis connection manager (`app/storage/redis.py`) managing connection pooling, bounded health checks, and lifecycle shutdown handlers using `redis.asyncio`.
+* Defined `CircuitStateStorage` protocol (`app/storage/circuit_storage.py`) providing clean storage abstraction with `RedisCircuitStorage` and `InMemoryCircuitStorage` implementations.
+* Implemented distributed, atomic state machine transitions in Redis using server-side Lua scripts (`acquire_permission`, `record_success`, `record_failure`, `release_probe`), guaranteeing multi-worker concurrency safety for `HALF_OPEN` single-probe execution (`CIRCUIT_HALF_OPEN_MAX_PROBES=1`).
+* Designed deliberate key schema `llm_gateway:circuit:{provider_id}` storing hash fields (`state`, `consecutive_failures`, `opened_at`, `last_failure_at`, `active_probes`) with auto-recovering TTLs for open circuits (`max(cooldown * 3, 300)`).
+* Refactored `CircuitBreakerManager` (`app/reliability/circuit_breaker.py`) to delegate to the storage abstraction with automatic, transparent fallback to local `InMemoryCircuitStorage` on Redis connectivity or timeout errors without leaking internal errors to clients or interrupting LLM completions.
+* Updated `GET /ready` in `app/api/routes_health.py` to report Redis connection status (`ready` / `degraded`) with graceful in-memory fallback transparency.
+* Added comprehensive unit test suite (`tests/test_circuit_breaker_redis.py`) for storage abstraction, fallback resilience, recovery behavior, probe atomicity, and readiness states without requiring a live Redis server.
+* Added live integration test suite (`tests/test_redis_integration.py`) with dynamic availability detection for local Redis daemons (`localhost:6379`).
+* Maintained full backwards compatibility across the entire test suite (76 tests collected, 75 passed, 1 skipped when local Redis daemon is offline).
+* Verified live end-to-end LLM inference against local Ollama `qwen2.5:3b`.
+
 
 

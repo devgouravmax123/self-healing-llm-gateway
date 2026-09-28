@@ -1,5 +1,6 @@
 """Main application module and FastAPI app factory."""
 
+import logging
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from typing import Any
@@ -17,14 +18,21 @@ from app.core.request_context import (
     reset_request_id,
     set_request_id,
 )
+from app.storage.redis import redis_manager
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan context manager for startup and shutdown events."""
-    # Startup logic (resources initialized here in future phases)
+    # Startup: Initialize Redis connection pool
+    logger.info("Starting up %s (Phase 09 — Redis Operational State)...", settings.app_name)
+    await redis_manager.initialize()
     yield
-    # Shutdown logic (cleanup resources here in future phases)
+    # Shutdown: Close Redis connection pool
+    logger.info("Shutting down %s and releasing resources...", settings.app_name)
+    await redis_manager.close()
 
 
 def create_app() -> FastAPI:
@@ -95,7 +103,7 @@ def create_app() -> FastAPI:
                 "name": settings.app_name,
                 "version": settings.app_version,
                 "status": "operational",
-                "phase": "Phase 08 — Provider Failover",
+                "phase": "Phase 09 — Redis Operational State",
                 "docs_url": "/docs",
             }
         )

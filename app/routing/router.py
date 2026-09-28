@@ -1,16 +1,18 @@
 """Router module responsible for provider selection."""
 
+from __future__ import annotations
+
 import logging
+from typing import TYPE_CHECKING
 
 from app.core.exceptions import GatewayError
 from app.models.provider import ProviderTarget
 from app.models.requests import ChatCompletionRequest
-from app.reliability.circuit_breaker import (
-    CircuitBreakerManager,
-    CircuitState,
-    circuit_breaker_manager,
-)
 from app.routing.provider_registry import ProviderRegistry, provider_registry
+from app.storage.circuit_storage import CircuitState
+
+if TYPE_CHECKING:
+    from app.reliability.circuit_breaker import CircuitBreakerManager
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +37,15 @@ class Router:
         circuit_manager: CircuitBreakerManager | None = None,
     ) -> None:
         self.registry = registry or provider_registry
-        self.circuit_manager = circuit_manager or circuit_breaker_manager
+        self._circuit_manager = circuit_manager
+
+    @property
+    def circuit_manager(self) -> CircuitBreakerManager:
+        if self._circuit_manager is not None:
+            return self._circuit_manager
+        from app.reliability.circuit_breaker import circuit_breaker_manager
+
+        return circuit_breaker_manager
 
     def get_candidates(
         self,

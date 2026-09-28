@@ -1,26 +1,23 @@
 """Circuit Breaker reliability component for upstream LLM providers."""
 
-import asyncio
 import logging
-import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
-from enum import StrEnum
+from typing import Any
+
+from redis.exceptions import RedisError
 
 from app.core.config import Settings, settings
 from app.core.exceptions import CircuitBreakerError, ProviderError
 from app.reliability.error_classifier import ErrorCategory
+from app.storage.circuit_storage import (
+    CircuitState,
+    CircuitStateStorage,
+    InMemoryCircuitStorage,
+    RedisCircuitStorage,
+)
+from app.storage.redis import RedisManager, redis_manager
 
 logger = logging.getLogger(__name__)
-
-
-class CircuitState(StrEnum):
-    """The three discrete states of a provider circuit breaker."""
-
-    CLOSED = "CLOSED"
-    OPEN = "OPEN"
-    HALF_OPEN = "HALF_OPEN"
-
 
 # Non-provider categories that represent client errors or non-health issues
 NON_CIRCUIT_FAILURE_CATEGORIES: set[ErrorCategory] = {
@@ -29,38 +26,65 @@ NON_CIRCUIT_FAILURE_CATEGORIES: set[ErrorCategory] = {
 }
 
 
-@dataclass
-class ProviderCircuitState:
-    """State machine representation for an individual provider's circuit breaker."""
-
-    provider_id: str
-    state: CircuitState = CircuitState.CLOSED
-    consecutive_failures: int = 0
-    consecutive_successes: int = 0
-    opened_at: float | None = None
-    last_failure_at: float | None = None
-    active_probes: int = 0
-    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-
-
 class CircuitBreakerManager:
-    """Manages provider-specific circuit breakers to prevent cascading failures."""
+    """Manages provider-specific circuit breakers using distributed storage with local fallback."""
 
     def __init__(
         self,
         config: Settings | None = None,
+        storage: CircuitStateStorage | None = None,
+        redis_mgr: RedisManager | None = None,
         time_func: Callable[[], float] | None = None,
     ) -> None:
         self.config = config or settings
-        self._time_func = time_func or time.monotonic
-        self._circuits: dict[str, ProviderCircuitState] = {}
-        self._global_lock = asyncio.Lock()
+        self.redis_mgr = redis_mgr or redis_manager
+        self._fallback_storage = InMemoryCircuitStorage(time_func=time_func)
+        self._explicit_storage = storage
+        self._cached_redis_storage: RedisCircuitStorage | None = None
+        self._time_func = time_func
 
-    def _get_or_create_circuit(self, provider_id: str) -> ProviderCircuitState:
-        """Get or initialize the state machine for a specific provider."""
-        if provider_id not in self._circuits:
-            self._circuits[provider_id] = ProviderCircuitState(provider_id=provider_id)
-        return self._circuits[provider_id]
+    def _get_active_storage(self) -> CircuitStateStorage:
+        """Resolve the active storage backend (Redis if available, else in-memory fallback)."""
+        if self._explicit_storage is not None:
+            return self._explicit_storage
+
+        redis_client = self.redis_mgr.get_client()
+        if redis_client is not None and self.redis_mgr.is_connected:
+            if (
+                self._cached_redis_storage is None
+                or self._cached_redis_storage.client is not redis_client
+            ):
+                self._cached_redis_storage = RedisCircuitStorage(
+                    redis_client=redis_client,
+                    config=self.config,
+                    time_func=self._time_func,
+                )
+            return self._cached_redis_storage
+
+        return self._fallback_storage
+
+    async def _execute_with_fallback(
+        self,
+        action_name: str,
+        redis_op: Callable[[CircuitStateStorage], Any],
+    ) -> Any:
+        """Execute a circuit operation against the active storage.
+
+        Falls back to local memory on Redis errors.
+        """
+        active = self._get_active_storage()
+        try:
+            return await redis_op(active)
+        except (RedisError, OSError, Exception) as exc:
+            if active is not self._fallback_storage:
+                logger.warning(
+                    "Redis error during circuit breaker operation '%s': %s. "
+                    "Failing back to in-memory circuit storage (process-local).",
+                    action_name,
+                    exc,
+                )
+                return await redis_op(self._fallback_storage)
+            raise exc
 
     async def acquire_permission(self, provider_id: str) -> None:
         """Check if a request is allowed to execute against the specified provider.
@@ -68,115 +92,105 @@ class CircuitBreakerManager:
         Raises:
             CircuitBreakerError: If the circuit is OPEN or HALF_OPEN probe capacity is exhausted.
         """
-        circuit = self._get_or_create_circuit(provider_id)
-        current_time = self._time_func()
+        cooldown = self.config.circuit_cooldown_seconds
+        max_probes = self.config.circuit_half_open_max_probes
 
-        async with circuit.lock:
-            # 1. If currently OPEN, check if cooldown period has elapsed
-            if circuit.state == CircuitState.OPEN:
-                cooldown = self.config.circuit_cooldown_seconds
-                opened_at = circuit.opened_at or current_time
-                if current_time - opened_at >= cooldown:
-                    # Transition OPEN -> HALF_OPEN
-                    logger.info(
-                        "Circuit for provider '%s' cooldown expired (%.2fs >= %.2fs). "
-                        "Transitioning OPEN -> HALF_OPEN",
-                        provider_id,
-                        current_time - opened_at,
-                        cooldown,
-                    )
-                    circuit.state = CircuitState.HALF_OPEN
-                    circuit.active_probes = 0
-                    circuit.consecutive_successes = 0
-                else:
-                    remaining = cooldown - (current_time - opened_at)
-                    logger.warning(
-                        "Request blocked for provider '%s': Circuit is OPEN "
-                        "(%.2fs remaining in cooldown)",
-                        provider_id,
-                        remaining,
-                    )
-                    raise CircuitBreakerError(
-                        provider=provider_id,
-                        message=(
-                            f"Provider '{provider_id}' is temporarily unavailable due to "
-                            f"circuit protection. Circuit is OPEN. "
-                            f"Cooldown remaining: {remaining:.1f}s."
-                        ),
-                        details={
-                            "circuit_state": CircuitState.OPEN.value,
-                            "cooldown_remaining_seconds": round(remaining, 2),
-                        },
-                    )
+        async def _op(storage: CircuitStateStorage) -> tuple[bool, CircuitState, float]:
+            return await storage.acquire_permission(
+                provider_id=provider_id,
+                cooldown_seconds=cooldown,
+                max_probes=max_probes,
+            )
 
-            # 2. If HALF_OPEN, enforce single / limited probe concurrency
-            if circuit.state == CircuitState.HALF_OPEN:
-                max_probes = self.config.circuit_half_open_max_probes
-                if circuit.active_probes >= max_probes:
-                    logger.warning(
-                        "Request blocked for provider '%s': Circuit is HALF_OPEN and "
-                        "probe limit reached (%d/%d active)",
-                        provider_id,
-                        circuit.active_probes,
-                        max_probes,
-                    )
-                    raise CircuitBreakerError(
-                        provider=provider_id,
-                        message=(
-                            f"Provider '{provider_id}' is recovering in HALF_OPEN state. "
-                            "Probe request is already in-flight."
-                        ),
-                        details={
-                            "circuit_state": CircuitState.HALF_OPEN.value,
-                            "active_probes": circuit.active_probes,
-                            "max_probes": max_probes,
-                        },
-                    )
-                # Claim probe slot
-                circuit.active_probes += 1
-                logger.info(
-                    "Granted HALF_OPEN probe permission for provider '%s' (active probes: %d/%d)",
+        allowed, state, remaining = await self._execute_with_fallback("acquire_permission", _op)
+
+        # Mirror state to local fallback store for fail-safe resilience
+        current_time = self._fallback_storage._time_func()
+        if not allowed and state == CircuitState.OPEN:
+            calc_opened_at = current_time - (self.config.circuit_cooldown_seconds - remaining)
+            await self._fallback_storage.update_snapshot(
+                provider_id=provider_id,
+                state=CircuitState.OPEN,
+                opened_at=calc_opened_at,
+            )
+        elif allowed and state == CircuitState.HALF_OPEN:
+            await self._fallback_storage.update_snapshot(
+                provider_id=provider_id,
+                state=CircuitState.HALF_OPEN,
+                active_probes=1,
+            )
+        elif allowed and state == CircuitState.CLOSED:
+            await self._fallback_storage.update_snapshot(
+                provider_id=provider_id,
+                state=CircuitState.CLOSED,
+            )
+
+        if not allowed:
+            if state == CircuitState.OPEN:
+                logger.warning(
+                    "Request blocked for provider '%s': Circuit is OPEN "
+                    "(%.2fs remaining in cooldown)",
                     provider_id,
-                    circuit.active_probes,
+                    remaining,
+                )
+                raise CircuitBreakerError(
+                    provider=provider_id,
+                    message=(
+                        f"Provider '{provider_id}' is temporarily unavailable due to "
+                        f"circuit protection. Circuit is OPEN. "
+                        f"Cooldown remaining: {remaining:.1f}s."
+                    ),
+                    details={
+                        "circuit_state": CircuitState.OPEN.value,
+                        "cooldown_remaining_seconds": round(remaining, 2),
+                    },
+                )
+            elif state == CircuitState.HALF_OPEN:
+                logger.warning(
+                    "Request blocked for provider '%s': Circuit is HALF_OPEN and "
+                    "probe limit reached (%d max active)",
+                    provider_id,
                     max_probes,
                 )
-                return
+                raise CircuitBreakerError(
+                    provider=provider_id,
+                    message=(
+                        f"Provider '{provider_id}' is recovering in HALF_OPEN state. "
+                        "Probe request is already in-flight."
+                    ),
+                    details={
+                        "circuit_state": CircuitState.HALF_OPEN.value,
+                        "max_probes": max_probes,
+                    },
+                )
 
-            # 3. If CLOSED, request is permitted
+        if state == CircuitState.HALF_OPEN:
+            logger.info(
+                "Granted HALF_OPEN probe permission for provider '%s' (max probes: %d)",
+                provider_id,
+                max_probes,
+            )
+        else:
             logger.debug("Granted permission for provider '%s' (Circuit CLOSED)", provider_id)
 
     async def record_success(self, provider_id: str) -> None:
         """Record a successful execution against the provider."""
-        circuit = self._get_or_create_circuit(provider_id)
-        async with circuit.lock:
-            if circuit.state == CircuitState.HALF_OPEN:
-                circuit.active_probes = max(0, circuit.active_probes - 1)
-                circuit.consecutive_successes += 1
-                logger.info(
-                    "HALF_OPEN probe succeeded for provider '%s'. "
-                    "Transitioning HALF_OPEN -> CLOSED",
-                    provider_id,
-                )
-                # Successful probe recovers the circuit
-                circuit.state = CircuitState.CLOSED
-                circuit.consecutive_failures = 0
-                circuit.consecutive_successes = 0
-                circuit.opened_at = None
-            elif circuit.state == CircuitState.CLOSED:
-                # Reset consecutive failure count on normal success
-                if circuit.consecutive_failures > 0:
-                    logger.debug(
-                        "Resetting failure count (%d -> 0) for provider '%s' on success",
-                        circuit.consecutive_failures,
-                        provider_id,
-                    )
-                    circuit.consecutive_failures = 0
+
+        async def _op(storage: CircuitStateStorage) -> None:
+            await storage.record_success(provider_id=provider_id)
+
+        await self._execute_with_fallback("record_success", _op)
+        # Mirror success to fallback store
+        await self._fallback_storage.update_snapshot(
+            provider_id=provider_id,
+            state=CircuitState.CLOSED,
+            consecutive_failures=0,
+            active_probes=0,
+        )
+        logger.info("Recorded success for provider '%s'", provider_id)
 
     async def record_failure(self, provider_id: str, error: Exception | ProviderError) -> None:
         """Record an execution failure against the provider."""
-        circuit = self._get_or_create_circuit(provider_id)
-        current_time = self._time_func()
-
         # Check if error category should count toward circuit breaker
         if isinstance(error, ProviderError) and error.category:
             try:
@@ -187,62 +201,105 @@ class CircuitBreakerManager:
                         cat,
                         provider_id,
                     )
-                    # If this was during HALF_OPEN, release the probe slot
-                    async with circuit.lock:
-                        if circuit.state == CircuitState.HALF_OPEN:
-                            circuit.active_probes = max(0, circuit.active_probes - 1)
+
+                    # Release probe slot if this was during HALF_OPEN
+                    async def _release_op(storage: CircuitStateStorage) -> None:
+                        await storage.release_probe(provider_id=provider_id)
+
+                    await self._execute_with_fallback("release_probe", _release_op)
+                    await self._fallback_storage.release_probe(provider_id=provider_id)
                     return
             except ValueError:
                 pass
 
-        async with circuit.lock:
-            circuit.last_failure_at = current_time
+        threshold = self.config.circuit_failure_threshold
 
-            if circuit.state == CircuitState.HALF_OPEN:
-                circuit.active_probes = max(0, circuit.active_probes - 1)
-                circuit.state = CircuitState.OPEN
-                circuit.opened_at = current_time
-                logger.warning(
-                    "HALF_OPEN probe failed for provider '%s'. "
-                    "Transitioning HALF_OPEN -> OPEN (reopened at %.2f)",
-                    provider_id,
-                    current_time,
-                )
-            elif circuit.state == CircuitState.CLOSED:
-                circuit.consecutive_failures += 1
-                threshold = self.config.circuit_failure_threshold
-                logger.warning(
-                    "Provider '%s' recorded failure (%d/%d consecutive failures)",
-                    provider_id,
-                    circuit.consecutive_failures,
-                    threshold,
-                )
-                if circuit.consecutive_failures >= threshold:
-                    circuit.state = CircuitState.OPEN
-                    circuit.opened_at = current_time
-                    logger.error(
-                        "Failure threshold reached (%d/%d) for provider '%s'. "
-                        "Transitioning CLOSED -> OPEN",
-                        circuit.consecutive_failures,
-                        threshold,
-                        provider_id,
-                    )
+        async def _fail_op(storage: CircuitStateStorage) -> tuple[CircuitState, int]:
+            return await storage.record_failure(
+                provider_id=provider_id,
+                failure_threshold=threshold,
+            )
+
+        new_state, failures = await self._execute_with_fallback("record_failure", _fail_op)
+        current_time = self._fallback_storage._time_func()
+        if new_state == CircuitState.OPEN:
+            await self._fallback_storage.update_snapshot(
+                provider_id=provider_id,
+                state=CircuitState.OPEN,
+                consecutive_failures=failures,
+                opened_at=current_time,
+                last_failure_at=current_time,
+                active_probes=0,
+            )
+            logger.warning(
+                "Provider '%s' circuit state changed to OPEN (failures: %d/%d)",
+                provider_id,
+                failures,
+                threshold,
+            )
+        else:
+            await self._fallback_storage.update_snapshot(
+                provider_id=provider_id,
+                consecutive_failures=failures,
+                last_failure_at=current_time,
+            )
+            logger.warning(
+                "Provider '%s' recorded failure (%d/%d consecutive failures)",
+                provider_id,
+                failures,
+                threshold,
+            )
+
+    async def get_state_async(self, provider_id: str) -> CircuitState:
+        """Async method to inspect current circuit state."""
+        cooldown = self.config.circuit_cooldown_seconds
+
+        async def _op(storage: CircuitStateStorage) -> CircuitState:
+            return await storage.get_state(provider_id=provider_id, cooldown_seconds=cooldown)
+
+        res: CircuitState = await self._execute_with_fallback("get_state", _op)
+        return res
 
     def get_state(self, provider_id: str) -> CircuitState:
-        """Get the current state for a provider (evaluating cooldown passively if needed)."""
-        circuit = self._get_or_create_circuit(provider_id)
-        current_time = self._time_func()
-        if circuit.state == CircuitState.OPEN:
-            cooldown = self.config.circuit_cooldown_seconds
-            opened_at = circuit.opened_at or current_time
-            if current_time - opened_at >= cooldown:
-                return CircuitState.HALF_OPEN
-        return circuit.state
+        """Synchronous inspection method for router candidate filtering."""
+        # Check fallback storage or active in-memory record directly
+        if self._explicit_storage and isinstance(self._explicit_storage, InMemoryCircuitStorage):
+            record = self._explicit_storage._circuits.get(provider_id)
+            if record:
+                if record.state == CircuitState.OPEN:
+                    opened_at = record.opened_at or 0.0
+                    if (
+                        self._fallback_storage._time_func() - opened_at
+                        >= self.config.circuit_cooldown_seconds
+                    ):
+                        return CircuitState.HALF_OPEN
+                return record.state
+        record = self._fallback_storage._circuits.get(provider_id)
+        if record:
+            if record.state == CircuitState.OPEN:
+                opened_at = record.opened_at or 0.0
+                if (
+                    self._fallback_storage._time_func() - opened_at
+                    >= self.config.circuit_cooldown_seconds
+                ):
+                    return CircuitState.HALF_OPEN
+            return record.state
+        return CircuitState.CLOSED
+
+    def _get_or_create_circuit(self, provider_id: str) -> Any:
+        """Backwards-compatibility helper for legacy unit test inspection."""
+        return self._fallback_storage._get_or_create(provider_id)
 
     def reset_all(self) -> None:
-        """Reset all circuit breaker states (primarily for testing)."""
-        self._circuits.clear()
+        """Synchronous reset for test suite isolation."""
+        self._fallback_storage._circuits.clear()
 
 
 # Global circuit breaker manager instance
 circuit_breaker_manager = CircuitBreakerManager()
+
+__all__ = [
+    "CircuitBreakerManager",
+    "CircuitState",
+    "circuit_breaker_manager",
+]
