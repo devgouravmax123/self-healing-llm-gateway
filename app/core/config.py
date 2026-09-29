@@ -58,5 +58,9 @@ class Settings(BaseSettings):
     otel_service_name: str = Field(default="self-healing-llm-gateway", alias="OTEL_SERVICE_NAME")
     otel_exporter_endpoint: str | None = Field(default=None, alias="OTEL_EXPORTER_OTLP_ENDPOINT")
 
+    # Phase 15: Chaos Testing & Administration Configuration
+    chaos_enabled: bool = Field(default=False, alias="CHAOS_ENABLED")
+    admin_api_key: str | None = Field(default=None, alias="ADMIN_API_KEY")
+
 
 settings = Settings()

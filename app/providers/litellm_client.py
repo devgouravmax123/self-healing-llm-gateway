@@ -15,6 +15,7 @@ from app.models.responses import (
     ChatCompletionResponse,
     CompletionUsage,
 )
+from app.reliability.chaos import chaos_manager
 from app.reliability.error_classifier import error_classifier
 
 logger = logging.getLogger(__name__)
@@ -89,7 +90,16 @@ class LiteLLMService:
         kwargs["timeout"] = self.config.provider_timeout
 
         provider_name = target.provider if target else self.config.llm_provider
+        provider_id = target.id if target else provider_name
+
         try:
+            # Phase 15: Evaluate deterministic chaos fault injection before upstream invocation
+            await chaos_manager.maybe_inject_fault(
+                provider_id=provider_id,
+                model=request.model,
+                request_id=request_id,
+            )
+
             raw_response = await litellm.acompletion(**kwargs)
             return self._convert_response(raw_response, request.model, request_id)
         except Exception as exc:
