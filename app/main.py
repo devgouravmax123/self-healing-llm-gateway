@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.routes_chat import router as chat_router
 from app.api.routes_health import router as health_router
+from app.api.routes_metrics import router as metrics_router
 from app.core.config import settings
 from app.core.exceptions import GatewayError
 from app.core.request_context import (
@@ -114,6 +115,7 @@ def create_app() -> FastAPI:
     # Include API Routers
     app.include_router(health_router)
     app.include_router(chat_router)
+    app.include_router(metrics_router)
 
     # Root endpoint
     @app.get("/", tags=["Root"], summary="Gateway Root")
