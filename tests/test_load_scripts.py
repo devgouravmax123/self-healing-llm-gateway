@@ -12,9 +12,11 @@ class TestLoadScriptsStaticValidation:
         """Verify required k6 foundation files exist on disk."""
         config_js = LOAD_TESTS_DIR / "config.js"
         baseline_js = LOAD_TESTS_DIR / "baseline.js"
+        concurrency_js = LOAD_TESTS_DIR / "concurrency.js"
 
         assert config_js.is_file(), f"Missing {config_js}"
         assert baseline_js.is_file(), f"Missing {baseline_js}"
+        assert concurrency_js.is_file(), f"Missing {concurrency_js}"
 
     def test_config_js_structure_and_env_variables(self) -> None:
         """Verify config.js defines expected environment variables and helper functions."""
@@ -40,10 +42,33 @@ class TestLoadScriptsStaticValidation:
         assert "http.post" in content
         assert "check(" in content
 
+    def test_concurrency_js_structure_and_endpoint(self) -> None:
+        """Verify concurrency.js references /v1/chat/completions, stages, and options."""
+        concurrency_js = LOAD_TESTS_DIR / "concurrency.js"
+        content = concurrency_js.read_text(encoding="utf-8")
+
+        assert "/v1/chat/completions" in content
+        assert "export const options" in content
+        assert "stages:" in content
+        assert "export default function" in content
+        assert "http.post" in content
+        assert "check(" in content
+        assert "CONCURRENT_VUS" in content
+        assert "buildChatPayload" in content
+        assert "getHeaders" in content
+
     def test_no_hardcoded_secrets_in_scripts(self) -> None:
         """Ensure no hardcoded API keys or secret credentials are in load test scripts."""
         for script_path in LOAD_TESTS_DIR.glob("*.js"):
             text = script_path.read_text(encoding="utf-8")
-            forbidden_tokens = ["gw_live_", "gw_test_", "sk-", "secret123", "password"]
+            forbidden_tokens = [
+                "gw_live_",
+                "gw_test_",
+                "sk-",
+                "secret123",
+                "password",
+                "DEFAULT_API_KEY",
+                "X-Tenant-ID",
+            ]
             for token in forbidden_tokens:
                 assert token not in text, f"Forbidden token '{token}' in {script_path.name}"
