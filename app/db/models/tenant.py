@@ -26,12 +26,15 @@ class Tenant(Base, TimestampMixin):
     requests: Mapped[list["RequestRecord"]] = relationship(
         "RequestRecord",
         back_populates="tenant",
+        passive_deletes="all",
     )
     usage_records: Mapped[list["UsageRecord"]] = relationship(
         "UsageRecord",
         back_populates="tenant",
+        passive_deletes="all",
     )
     api_keys: Mapped[list["ApiKey"]] = relationship(
         "ApiKey",
         back_populates="tenant",
+        passive_deletes="all",
     )

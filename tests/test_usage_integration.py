@@ -16,6 +16,8 @@ from sqlalchemy.ext.asyncio import (
 
 from app.core.config import settings
 from app.db.base import Base
+from app.db.models.tenant import Tenant
+from app.db.session import database_manager
 from app.models.provider import ProviderTarget
 from app.models.requests import ChatCompletionRequest, ChatMessage
 from app.models.responses import (
@@ -42,6 +44,13 @@ async def _is_postgres_available() -> bool:
 pytestmark = pytest.mark.asyncio
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def cleanup_db_manager() -> AsyncGenerator[None, None]:
+    """Ensure database_manager connection pool is cleanly closed between tests."""
+    yield
+    await database_manager.close()
+
+
 @pytest_asyncio.fixture
 async def pg_engine() -> AsyncGenerator[AsyncEngine, None]:
     if not await _is_postgres_available():
@@ -59,6 +68,10 @@ async def pg_engine() -> AsyncGenerator[AsyncEngine, None]:
 async def pg_session(pg_engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
     session_factory = async_sessionmaker(pg_engine, expire_on_commit=False, class_=AsyncSession)
     async with session_factory() as session:
+        # Pre-seed standard test tenant to satisfy foreign-key constraints
+        tenant = Tenant(id="tenant_test_1", name="Test Org", status="active")
+        session.add(tenant)
+        await session.commit()
         yield session
 
 
