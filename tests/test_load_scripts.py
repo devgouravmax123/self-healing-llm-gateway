@@ -13,10 +13,12 @@ class TestLoadScriptsStaticValidation:
         config_js = LOAD_TESTS_DIR / "config.js"
         baseline_js = LOAD_TESTS_DIR / "baseline.js"
         concurrency_js = LOAD_TESTS_DIR / "concurrency.js"
+        chaos_load_js = LOAD_TESTS_DIR / "chaos_load.js"
 
         assert config_js.is_file(), f"Missing {config_js}"
         assert baseline_js.is_file(), f"Missing {baseline_js}"
         assert concurrency_js.is_file(), f"Missing {concurrency_js}"
+        assert chaos_load_js.is_file(), f"Missing {chaos_load_js}"
 
     def test_config_js_structure_and_env_variables(self) -> None:
         """Verify config.js defines expected environment variables and helper functions."""
@@ -56,6 +58,23 @@ class TestLoadScriptsStaticValidation:
         assert "CONCURRENT_VUS" in content
         assert "buildChatPayload" in content
         assert "getHeaders" in content
+
+    def test_chaos_load_js_structure_and_endpoint(self) -> None:
+        """Verify chaos_load.js references /v1/chat/completions, stages, and options."""
+        chaos_load_js = LOAD_TESTS_DIR / "chaos_load.js"
+        content = chaos_load_js.read_text(encoding="utf-8")
+
+        assert "/v1/chat/completions" in content
+        assert "export const options" in content
+        assert "stages:" in content
+        assert "export default function" in content
+        assert "http.post" in content
+        assert "check(" in content
+        assert "CHAOS_VUS" in content
+        assert "buildChatPayload" in content
+        assert "getHeaders" in content
+        assert "ADMIN_API_KEY" not in content
+        assert "/admin/chaos" not in content
 
     def test_no_hardcoded_secrets_in_scripts(self) -> None:
         """Ensure no hardcoded API keys or secret credentials are in load test scripts."""

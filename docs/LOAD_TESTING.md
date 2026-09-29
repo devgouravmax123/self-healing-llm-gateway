@@ -89,6 +89,89 @@ For transparency and reproducibility, the preliminary diagnostic iterations prio
 
 ---
 
-## 4. Scope & Interpretation Notes
-- **Throughput Statement**: The throughput of `10.01 req/s` represents the measured throughput for this specific 10-VU Phase 17.2 workload on the local host with `qwen2.5:3b`. It does not represent maximum capacity or an infrastructure guarantee.
-- **Isolation**: Latencies reflect local end-to-end round-trip execution including database authentication, rate limit checking, gateway routing, and local Ollama inference.
+## 4. Phase 17.3 — Concurrent Provider-Failure / Chaos Benchmark
+
+### Test Description
+Measures gateway reliability behavior under concurrent load during deterministic upstream provider failure injection (`SERVER_ERROR` with bounded `failure_count=20`), including exponential backoff retries, circuit breaker failure accumulation, circuit state transitions, fast-failing during `OPEN`, and automatic circuit recovery (`HALF_OPEN` → `CLOSED`) following fault clearance.
+
+### Workload & Chaos Configuration
+- **Date/Time**: 2026-09-30T04:01:00+05:30
+- **Script**: `load_tests/chaos_load.js`
+- **Virtual Users (VUs)**: 10 max
+- **Ramping Stages**:
+  - Stage 1 (Ramp-up): 10s to 10 VUs
+  - Stage 2 (Steady state): 60s at 10 VUs (chaos injection active, then cleared)
+  - Stage 3 (Ramp-down): 10s to 0 VUs
+- **Target Model**: `qwen2.5:3b`
+- **Base URL**: `http://localhost:8000`
+- **Authentication**: Authenticated Bearer API key (`tenant_default`)
+- **Fault Type**: `SERVER_ERROR` (deterministic upstream HTTP 500)
+- **Fault Target**: `ollama_default`
+- **Failure Count**: 20 bounded failures injected via `POST /admin/chaos`
+- **Environment Context**:
+  - Temporary benchmark tenant RPM: `10,000 RPM` (used exclusively during this run; normal default of `60 RPM` was restored immediately upon completion).
+  - Chaos enabled for benchmark: `CHAOS_ENABLED=true` with out-of-band `ADMIN_API_KEY`.
+  - Normal configuration restored after benchmark: **Yes**
+
+### Measured k6 Results
+
+| Metric | Measured Value |
+| :--- | ---: |
+| **Total Requests** | 751 |
+| **Total Iterations** | 751 |
+| **Throughput (RPS)** | 9.39 req/s |
+| **Average Latency (All Requests)** | 939.56 ms |
+| **Average Latency (200 OK Requests)** | 935.23 ms |
+| **p50 Latency (Median)** | 959.19 ms |
+| **p90 Latency** | 1.05 s |
+| **p95 Latency** | 1.13 s |
+| **p99 Latency** | ~4.32 s |
+| **Minimum Latency** | 161.04 ms |
+| **Maximum Latency** | 4.32 s |
+| **Error Rate (`http_req_failed`)** | **0.53%** (4 out of 751) |
+| **Maximum VUs** | 10 |
+
+### HTTP Status Breakdown
+- **2xx (200 OK)**: 747 (99.47%)
+- **5xx (502 / Upstream Server Error)**: 4 (0.53%)
+- **4xx (Client Errors)**: 0 (0.00%)
+- **Other**: 0
+
+### Server-Side Provider & Observability Evidence (`/metrics`)
+- **Target Provider**: `ollama_default`
+- **Model**: `qwen2.5:3b`
+- **Provider Executions Dispatched**: 768 total physical attempts
+  - Successful Provider Executions: 748 (747 successful k6 HTTP 200 requests + 1 pre-chaos authenticated smoke verification request; the smoke probe is not part of the k6 workload)
+  - Injected Provider Errors: 20 (`gateway_provider_errors_total{error_category="SERVER_ERROR"}: 20.0`)
+- **Retries Triggered**: 16 (`gateway_retries_total{provider="ollama_default",reason="SERVER_ERROR"}: 16.0`)
+- **Failure & Retry Reconciliation**:
+  - **4 client requests** exhausted all 3 physical attempts (1 initial attempt + 2 retries):
+    - 12 failed physical attempts
+    - 8 retries
+    - 4 final HTTP 502 Bad Gateway responses
+  - **5 additional concurrent requests** entered the failure window and recovered when chaos tokens expired:
+    - 3 requests experienced 2 physical failures (attempt 1/3 and attempt 2/3) and succeeded on retry 2 (attempt 3/3)
+    - 2 requests experienced 1 physical failure (attempt 1/3) and succeeded on retry 1 (attempt 2/3)
+    - 8 failed physical attempts
+    - 8 retries (across failed and successful retry attempts)
+    - All 5 requests ultimately returned HTTP 200 OK
+  - **Summary**:
+    - Total physical provider failures = 20 (`12 + 8`)
+    - Total initial failed attempts = 9 (`4 + 5`)
+    - Total retries = 16 (`8 + 8`)
+    - Total HTTP 502 responses = 4
+    - Total requests recovered after intermediate provider failures = 5
+    - *Note*: Successful HTTP 200 requests can still contribute provider-error and retry metrics when intermediate physical attempts fail before a subsequent retry succeeds.
+- **Circuit Breaker Lifecycle**:
+  - `gateway_circuit_state{provider="ollama_default",state="open"}` was observed as the circuit tripped during the 20 injected failures.
+  - No benchmark request was observed as a circuit-open fast failure in the recorded run; the circuit reached `OPEN` state, but the benchmark did not produce a measurable client request rejected specifically by an already-open circuit.
+  - Upon expiration of the 20 bounded failures and expiration of cooldown, recovery proceeded through `HALF_OPEN` and back to `CLOSED` (`gateway_circuit_state{provider="ollama_default",state="closed"}: 1.0`).
+- **Failovers**: `gateway_failovers_total` remained 0 because candidate-to-candidate failover was not benchmarked (only one `ProviderTarget`, `ollama_default`, was configured in the topology).
+- **Token Volume Processed**: 25,432 input tokens / 2,992 output tokens processed across the benchmark window.
+
+---
+
+## 5. Scope & Interpretation Notes
+- **Topology Limitation**: Candidate-to-candidate failover was not benchmarked because only one ProviderTarget (`ollama_default`) was configured. As per architecture guidelines, candidate failover was not simulated via duplicate or fake provider endpoints.
+- **Reliability Validation**: The benchmark successfully validated bounded retries with backoff, failure categorization (`SERVER_ERROR`), circuit state protection, and automatic circuit recovery back to `CLOSED` under continuous concurrent traffic.
+- **Throughput Statement**: The throughput of `9.39 req/s` represents the measured throughput for this specific 10-VU Phase 17.3 failure workload on the local host with `qwen2.5:3b`. It does not represent maximum capacity or an infrastructure guarantee.
