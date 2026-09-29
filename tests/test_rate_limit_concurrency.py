@@ -82,36 +82,44 @@ async def test_rate_limiter_concurrency_simulated() -> None:
 @pytest.mark.asyncio
 async def test_live_redis_rate_limiting_concurrency() -> None:
     """Live integration test with real Redis (skipped if Redis is offline)."""
-    is_live = await redis_manager.ping()
-    if not is_live:
+    initialized_here = False
+    if not redis_manager.is_connected:
+        await redis_manager.initialize()
+        initialized_here = redis_manager.is_connected
+
+    if not redis_manager.is_connected:
         pytest.skip("Redis server is not available at REDIS_URL")
 
-    limiter = RateLimiter(redis_mgr=redis_manager)
-    tenant_id = "tenant_test_live_concurrency"
-    limit = 5
-    window_sec = 2
+    try:
+        limiter = RateLimiter(redis_mgr=redis_manager)
+        tenant_id = "tenant_test_live_concurrency"
+        limit = 5
+        window_sec = 2
 
-    # Clean up test key first
-    client = redis_manager.get_client()
-    if client is not None:
-        await client.delete(f"ratelimit:{tenant_id}")
+        # Clean up test key first
+        client = redis_manager.get_client()
+        if client is not None:
+            await client.delete(f"ratelimit:{tenant_id}")
 
-    allowed_count = 0
-    rejected_count = 0
+        allowed_count = 0
+        rejected_count = 0
 
-    async def make_call() -> None:
-        nonlocal allowed_count, rejected_count
-        try:
-            await limiter.check_rate_limit(
-                tenant_id=tenant_id,
-                limit=limit,
-                window_seconds=window_sec,
-            )
-            allowed_count += 1
-        except RateLimitError:
-            rejected_count += 1
+        async def make_call() -> None:
+            nonlocal allowed_count, rejected_count
+            try:
+                await limiter.check_rate_limit(
+                    tenant_id=tenant_id,
+                    limit=limit,
+                    window_seconds=window_sec,
+                )
+                allowed_count += 1
+            except RateLimitError:
+                rejected_count += 1
 
-    await asyncio.gather(*(make_call() for _ in range(15)))
+        await asyncio.gather(*(make_call() for _ in range(15)))
 
-    assert allowed_count == limit
-    assert rejected_count == 10
+        assert allowed_count == limit
+        assert rejected_count == 10
+    finally:
+        if initialized_here:
+            await redis_manager.close()
