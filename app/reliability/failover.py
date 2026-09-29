@@ -12,6 +12,7 @@ from app.reliability.error_classifier import ErrorCategory
 from app.reliability.retry import RetryManager, retry_manager
 from app.routing.router import NoHealthyProviderError, Router
 from app.routing.router import router as default_router
+from app.usage.tracker import UsageTracker, usage_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,7 @@ FAILOVER_ELIGIBLE_CATEGORIES: set[ErrorCategory] = {
 
 
 class FailoverManager:
-    """Orchestrates multi-provider failover with circuit breaker and retry integration."""
+    """Orchestrates multi-provider failover with circuit breaker, retry, and usage integration."""
 
     def __init__(
         self,
@@ -34,11 +35,13 @@ class FailoverManager:
         router_instance: Router | None = None,
         retry_instance: RetryManager | None = None,
         circuit_instance: CircuitBreakerManager | None = None,
+        usage_tracker_instance: UsageTracker | None = None,
     ) -> None:
         self.config = config or settings
         self.router = router_instance or default_router
         self.retry_manager = retry_instance or retry_manager
         self.circuit_manager = circuit_instance or circuit_breaker_manager
+        self.usage_tracker = usage_tracker_instance or usage_tracker
 
     def is_failover_eligible(self, error: Exception) -> bool:
         """Determine if an error is eligible to trigger failover to another provider."""
@@ -132,13 +135,29 @@ class FailoverManager:
                     request_id=request_id,
                     target=target,
                 )
-                # 4. Success -> notify circuit breaker and return response
+                # 4. Success -> notify circuit breaker, record usage, and return response
                 await self.circuit_manager.record_success(target.id)
                 logger.info(
                     "Request succeeded via provider '%s' for request_id=%s",
                     target.id,
                     request_id,
                 )
+
+                # Record usage safely (guaranteed non-blocking / non-failing)
+                try:
+                    await self.usage_tracker.record_usage(
+                        request=request,
+                        request_id=request_id,
+                        target=target,
+                        response=response,
+                    )
+                except Exception as tracker_exc:
+                    logger.warning(
+                        "Usage tracking invocation failed for request_id=%s: %s",
+                        request_id,
+                        tracker_exc,
+                    )
+
                 return response
 
             except Exception as exc:

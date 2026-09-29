@@ -50,25 +50,21 @@ class UsageRecord(Base):
         String(128),
         nullable=False,
     )
-    input_tokens: Mapped[int] = mapped_column(
+    input_tokens: Mapped[int | None] = mapped_column(
         Integer,
-        nullable=False,
-        default=0,
+        nullable=True,
     )
-    output_tokens: Mapped[int] = mapped_column(
+    output_tokens: Mapped[int | None] = mapped_column(
         Integer,
-        nullable=False,
-        default=0,
+        nullable=True,
     )
-    total_tokens: Mapped[int] = mapped_column(
+    total_tokens: Mapped[int | None] = mapped_column(
         Integer,
-        nullable=False,
-        default=0,
+        nullable=True,
     )
-    estimated_cost: Mapped[Decimal] = mapped_column(
+    estimated_cost: Mapped[Decimal | None] = mapped_column(
         Numeric(10, 6),
-        nullable=False,
-        default=Decimal("0.000000"),
+        nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

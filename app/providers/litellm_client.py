@@ -174,20 +174,27 @@ class LiteLLMService:
             )
 
         raw_usage = getattr(raw, "usage", None)
-        usage: CompletionUsage
+        usage: CompletionUsage | None = None
         if raw_usage is not None:
-            prompt_tokens = getattr(raw_usage, "prompt_tokens", 0) or 0
-            completion_tokens = getattr(raw_usage, "completion_tokens", 0) or 0
-            total_tokens = getattr(raw_usage, "total_tokens", 0) or (
-                prompt_tokens + completion_tokens
-            )
+            prompt_tokens = getattr(raw_usage, "prompt_tokens", None)
+            if prompt_tokens is not None:
+                prompt_tokens = int(prompt_tokens)
+
+            completion_tokens = getattr(raw_usage, "completion_tokens", None)
+            if completion_tokens is not None:
+                completion_tokens = int(completion_tokens)
+
+            total_tokens = getattr(raw_usage, "total_tokens", None)
+            if total_tokens is not None:
+                total_tokens = int(total_tokens)
+
             usage = CompletionUsage(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 total_tokens=total_tokens,
             )
         else:
-            usage = CompletionUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+            usage = None
 
         created = getattr(raw, "created", None)
         created_int = int(created) if created is not None else None

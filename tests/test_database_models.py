@@ -58,10 +58,10 @@ class TestDatabaseModelsMetadata:
         assert isinstance(table.columns["id"].type, UUID)
         assert table.columns["provider"].nullable is False
         assert table.columns["model"].nullable is False
-        assert table.columns["input_tokens"].nullable is False
-        assert table.columns["output_tokens"].nullable is False
-        assert table.columns["total_tokens"].nullable is False
-        assert table.columns["estimated_cost"].nullable is False
+        assert table.columns["input_tokens"].nullable is True
+        assert table.columns["output_tokens"].nullable is True
+        assert table.columns["total_tokens"].nullable is True
+        assert table.columns["estimated_cost"].nullable is True
 
         # Verify FK constraints ondelete
         req_fk = list(table.columns["request_id"].foreign_keys)[0]
