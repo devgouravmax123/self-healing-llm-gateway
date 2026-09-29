@@ -36,6 +36,7 @@ from app.core.request_context import (
 )
 from app.db.session import database_manager
 from app.observability.metrics import gateway_metrics
+from app.observability.tracing import setup_tracing
 from app.storage.redis import redis_manager
 
 # Initialize structured JSON logging exactly once on module load
@@ -47,10 +48,11 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan context manager for startup and shutdown events."""
-    # Startup: Initialize Redis connection pool and PostgreSQL engine
+    # Startup: Initialize Redis connection pool, PostgreSQL engine, and OpenTelemetry tracing
     logger.info(
         "Starting up %s (Phase 11 — PostgreSQL Durable Storage Foundation)...", settings.app_name
     )
+    setup_tracing()
     await redis_manager.initialize()
     await database_manager.initialize()
     yield

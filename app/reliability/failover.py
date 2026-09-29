@@ -88,14 +88,35 @@ class FailoverManager:
         last_exception: Exception | None = None
         last_executed_provider_id: str | None = None
 
+        from app.observability.tracing import trace_span
+
         while len(attempted_provider_ids) < max_providers:
             # 1. Select next eligible provider target
             try:
-                target: ProviderTarget = self.router.select_provider(
+                candidates = self.router.get_candidates(
                     request=request,
                     exclude_provider_ids=attempted_provider_ids,
                     check_circuit=False,
                 )
+                with trace_span(
+                    "routing.select",
+                    attributes={
+                        "model": request.model,
+                        "candidate_count": len(candidates),
+                    },
+                ) as select_span:
+                    target: ProviderTarget = self.router.select_provider(
+                        request=request,
+                        exclude_provider_ids=attempted_provider_ids,
+                        check_circuit=False,
+                    )
+                    try:
+                        if select_span is not None:
+                            select_span.set_attribute("selected_provider", target.id)
+                            select_span.set_attribute("llm.provider", target.id)
+                            select_span.set_attribute("llm.model", target.model)
+                    except Exception:
+                        pass
             except NoHealthyProviderError as exc:
                 logger.warning(
                     "No further eligible providers available for request_id=%s (attempted: %s)",
@@ -151,6 +172,17 @@ class FailoverManager:
                     to_provider=target.id,
                     reason="retry_exhausted",
                 ).inc()
+
+                # OpenTelemetry span for failover transition
+                with trace_span(
+                    "failover.transition",
+                    attributes={
+                        "from_provider": last_executed_provider_id,
+                        "to_provider": target.id,
+                        "reason": "retry_exhausted",
+                    },
+                ):
+                    pass
 
                 # Structured lifecycle event: failover_started
                 logger.info(

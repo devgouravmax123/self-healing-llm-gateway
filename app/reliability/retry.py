@@ -12,6 +12,7 @@ from app.models.provider import ProviderTarget
 from app.models.requests import ChatCompletionRequest
 from app.models.responses import ChatCompletionResponse
 from app.observability.metrics import GatewayMetrics, gateway_metrics
+from app.observability.tracing import trace_span
 from app.providers.litellm_client import LiteLLMService, litellm_service
 from app.reliability.health_tracker import HealthTracker, health_tracker
 
@@ -86,11 +87,24 @@ class RetryManager:
                     attempt_number,
                     total_attempts,
                 )
-                response = await self.provider_service.execute_chat_completion(
-                    request=request,
-                    request_id=request_id,
-                    target=target,
-                )
+                with trace_span(
+                    "provider.attempt",
+                    attributes={
+                        "llm.provider": target.id,
+                        "llm.model": target.model,
+                        "llm.attempt": attempt_number,
+                    },
+                ) as attempt_span:
+                    try:
+                        response = await self.provider_service.execute_chat_completion(
+                            request=request,
+                            request_id=request_id,
+                            target=target,
+                        )
+                    except ProviderError as p_exc:
+                        if attempt_span is not None and p_exc.category:
+                            attempt_span.set_attribute("llm.error_type", p_exc.category)
+                        raise
                 duration_sec = time.perf_counter() - t0
                 latency_ms = duration_sec * 1000.0
 
@@ -229,7 +243,14 @@ class RetryManager:
                         "error_type": reason_str,
                     },
                 )
-                await self._sleep(delay)
+                with trace_span(
+                    "retry.backoff",
+                    attributes={
+                        "retry.delay_seconds": delay,
+                        "llm.attempt": attempt_number + 1,
+                    },
+                ):
+                    await self._sleep(delay)
 
         # Fallback if somehow loop exited without raising
         if last_error is not None:

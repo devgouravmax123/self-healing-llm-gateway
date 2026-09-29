@@ -69,40 +69,59 @@ async def create_chat_completion(
         },
     )
 
-    # 1. Check rate limit for authenticated tenant (happens before router/provider/failover)
-    await rate_limiter.check_rate_limit(tenant_id=tenant_context.tenant_id)
+    from app.observability.tracing import trace_span
 
-    # 2. Ensure failover_manager uses the currently bound router & retry_manager in this module
-    failover_manager.router = gateway_router
-    failover_manager.retry_manager = retry_manager
-    failover_manager.circuit_manager = circuit_breaker_manager
-
-    # 3. Execute with failover passing authenticated tenant_id for secure usage attribution
-    t_start = time.perf_counter()
-    response = await failover_manager.execute_with_failover(
-        request=request,
-        request_id=request_id,
-        tenant_id=tenant_context.tenant_id,
-    )
-    latency_sec = time.perf_counter() - t_start
-
-    # Structured lifecycle event: request_completed
-    active_provider = get_provider_id() or None
-    logger.info(
-        "Request completed: request_id=%s, tenant_id=%s, provider=%s, model=%s, latency=%.3fs",
-        request_id,
-        tenant_context.tenant_id,
-        active_provider,
-        request.model,
-        latency_sec,
-        extra={
-            "event": "request_completed",
-            "request_id": request_id,
-            "tenant_id": tenant_context.tenant_id,
+    with trace_span(
+        "gateway.request",
+        attributes={
+            "request.id": request_id,
+            "tenant.id": tenant_context.tenant_id,
             "feature": feature,
-            "provider": active_provider,
-            "model": request.model,
-            "latency": latency_sec,
+            "llm.request.model": request.model,
         },
-    )
-    return response
+    ) as root_span:
+        # 1. Check rate limit for authenticated tenant (happens before router/provider/failover)
+        await rate_limiter.check_rate_limit(tenant_id=tenant_context.tenant_id)
+
+        # 2. Ensure failover_manager uses the currently bound router & retry_manager in this module
+        failover_manager.router = gateway_router
+        failover_manager.retry_manager = retry_manager
+        failover_manager.circuit_manager = circuit_breaker_manager
+
+        # 3. Execute with failover passing authenticated tenant_id for secure usage attribution
+        t_start = time.perf_counter()
+        response = await failover_manager.execute_with_failover(
+            request=request,
+            request_id=request_id,
+            tenant_id=tenant_context.tenant_id,
+        )
+        latency_sec = time.perf_counter() - t_start
+
+        # Structured lifecycle event: request_completed
+        active_provider = get_provider_id() or None
+        logger.info(
+            "Request completed: request_id=%s, tenant_id=%s, provider=%s, model=%s, latency=%.3fs",
+            request_id,
+            tenant_context.tenant_id,
+            active_provider,
+            request.model,
+            latency_sec,
+            extra={
+                "event": "request_completed",
+                "request_id": request_id,
+                "tenant_id": tenant_context.tenant_id,
+                "feature": feature,
+                "provider": active_provider,
+                "model": request.model,
+                "latency": latency_sec,
+            },
+        )
+        try:
+            if root_span is not None:
+                if active_provider:
+                    root_span.set_attribute("llm.provider", active_provider)
+                root_span.set_attribute("llm.model", request.model)
+        except Exception:
+            pass
+
+        return response

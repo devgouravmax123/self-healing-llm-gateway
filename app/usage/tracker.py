@@ -9,6 +9,7 @@ from app.models.provider import ProviderTarget
 from app.models.requests import ChatCompletionRequest
 from app.models.responses import ChatCompletionResponse
 from app.observability.metrics import GatewayMetrics, gateway_metrics
+from app.observability.tracing import trace_span
 from app.pricing.calculator import CostCalculator, cost_calculator
 
 logger = logging.getLogger(__name__)
@@ -87,44 +88,54 @@ class UsageTracker:
             estimated_cost,
         )
 
-        # 4. Record Prometheus metrics (Phase 14.3c)
-        # Canonical provider label is target.id to align with all Phase 14 metrics
-        if input_tokens is not None and input_tokens > 0:
-            self.metrics.tokens_total.labels(
-                provider=target.id,
-                model=target.model,
-                type="input",
-            ).inc(input_tokens)
+        with trace_span(
+            "usage.record",
+            attributes={
+                "llm.provider": target.id,
+                "llm.model": target.model,
+                "llm.usage.prompt_tokens": input_tokens,
+                "llm.usage.completion_tokens": output_tokens,
+                "llm.usage.total_tokens": total_tokens,
+            },
+        ):
+            # 4. Record Prometheus metrics (Phase 14.3c)
+            # Canonical provider label is target.id to align with all Phase 14 metrics
+            if input_tokens is not None and input_tokens > 0:
+                self.metrics.tokens_total.labels(
+                    provider=target.id,
+                    model=target.model,
+                    type="input",
+                ).inc(input_tokens)
 
-        if output_tokens is not None and output_tokens > 0:
-            self.metrics.tokens_total.labels(
-                provider=target.id,
-                model=target.model,
-                type="output",
-            ).inc(output_tokens)
+            if output_tokens is not None and output_tokens > 0:
+                self.metrics.tokens_total.labels(
+                    provider=target.id,
+                    model=target.model,
+                    type="output",
+                ).inc(output_tokens)
 
-        if estimated_cost is not None and estimated_cost > 0:
-            self.metrics.estimated_cost_usd_total.labels(
-                provider=target.id,
-                model=target.model,
-            ).inc(float(estimated_cost))
+            if estimated_cost is not None and estimated_cost > 0:
+                self.metrics.estimated_cost_usd_total.labels(
+                    provider=target.id,
+                    model=target.model,
+                ).inc(float(estimated_cost))
 
-        # 5. Persist to database repository safely
-        try:
-            await self.repository.create_usage_record(
-                request_id=request_id,
-                provider=provider_name,
-                model=model_name,
-                tenant_id=effective_tenant_id,
-                feature=feature,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                total_tokens=total_tokens,
-                estimated_cost=estimated_cost,
-                requested_model=request.model,
-            )
-        except Exception as exc:
-            logger.warning("Usage tracking error for request_id=%s: %s", request_id, exc)
+            # 5. Persist to database repository safely
+            try:
+                await self.repository.create_usage_record(
+                    request_id=request_id,
+                    provider=provider_name,
+                    model=model_name,
+                    tenant_id=effective_tenant_id,
+                    feature=feature,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    total_tokens=total_tokens,
+                    estimated_cost=estimated_cost,
+                    requested_model=request.model,
+                )
+            except Exception as exc:
+                logger.warning("Usage tracking error for request_id=%s: %s", request_id, exc)
 
 
 # Global usage tracker instance

@@ -11,6 +11,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
     app_name: str = "Self-Healing LLM Gateway"
@@ -51,6 +52,11 @@ class Settings(BaseSettings):
     # Rate Limiting Configuration
     default_tenant_rpm: int = Field(default=60, alias="DEFAULT_TENANT_RPM")
     rate_limit_window_seconds: int = Field(default=60, alias="RATE_LIMIT_WINDOW_SECONDS")
+
+    # Observability: OpenTelemetry Configuration
+    otel_enabled: bool = Field(default=True, alias="OTEL_ENABLED")
+    otel_service_name: str = Field(default="self-healing-llm-gateway", alias="OTEL_SERVICE_NAME")
+    otel_exporter_endpoint: str | None = Field(default=None, alias="OTEL_EXPORTER_OTLP_ENDPOINT")
 
 
 settings = Settings()
