@@ -46,7 +46,8 @@ pytestmark = pytest.mark.asyncio
 
 @pytest_asyncio.fixture(autouse=True)
 async def cleanup_db_manager() -> AsyncGenerator[None, None]:
-    """Ensure database_manager connection pool is cleanly closed between tests."""
+    """Ensure database_manager connection pool is cleanly closed before and after tests."""
+    await database_manager.close()
     yield
     await database_manager.close()
 

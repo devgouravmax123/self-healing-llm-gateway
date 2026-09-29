@@ -93,3 +93,19 @@ def test_existing_endpoints_regression() -> None:
     root_resp = client.get("/")
     assert root_resp.status_code == 200
     assert root_resp.json()["status"] == "operational"
+
+
+def test_metrics_endpoint_exposes_phase_14_2_metrics() -> None:
+    """Test 6: Verify GET /metrics exposes all five Phase 14.2 metric families."""
+    app = create_app()
+    client = TestClient(app)
+
+    response = client.get("/metrics")
+    assert response.status_code == 200
+    body = response.text
+
+    assert "gateway_requests_total" in body
+    assert "gateway_request_duration_seconds" in body
+    assert "gateway_provider_requests_total" in body
+    assert "gateway_provider_duration_seconds" in body
+    assert "gateway_provider_errors_total" in body

@@ -1,6 +1,7 @@
 """Main application module and FastAPI app factory."""
 
 import logging
+import time
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from typing import Any
@@ -16,10 +17,14 @@ from app.core.config import settings
 from app.core.exceptions import GatewayError
 from app.core.request_context import (
     generate_request_id,
+    get_requested_model,
     reset_request_id,
+    reset_requested_model,
     set_request_id,
+    set_requested_model,
 )
 from app.db.session import database_manager
+from app.observability.metrics import gateway_metrics
 from app.storage.redis import redis_manager
 
 logger = logging.getLogger(__name__)
@@ -65,20 +70,45 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Request ID middleware
+    # Request ID and Chat Request Metrics middleware
     @app.middleware("http")
-    async def request_id_middleware(
+    async def request_id_and_metrics_middleware(
         request: Request, call_next: Callable[[Request], Any]
     ) -> Response:
         # Extract existing X-Request-ID header or generate a new one
         request_id = request.headers.get("X-Request-ID") or generate_request_id()
-        token = set_request_id(request_id)
+        id_token = set_request_id(request_id)
+        model_token = set_requested_model("")
+
+        is_chat_request = request.url.path == "/v1/chat/completions"
+        start_time = time.perf_counter() if is_chat_request else 0.0
+
         try:
             response: Response = await call_next(request)
             response.headers["X-Request-ID"] = request_id
+
+            if is_chat_request:
+                duration_sec = time.perf_counter() - start_time
+                status_str = str(response.status_code)
+                model_str = (
+                    getattr(request.state, "requested_model", None)
+                    or get_requested_model()
+                    or "unknown"
+                )
+
+                gateway_metrics.requests_total.labels(
+                    model=model_str,
+                    status_code=status_str,
+                ).inc()
+                gateway_metrics.request_duration_seconds.labels(
+                    model=model_str,
+                    status_code=status_str,
+                ).observe(duration_sec)
+
             return response
         finally:
-            reset_request_id(token)
+            reset_request_id(id_token)
+            reset_requested_model(model_token)
 
     # Exception Handlers
     @app.exception_handler(GatewayError)

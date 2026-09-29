@@ -11,6 +11,7 @@ from app.core.exceptions import ProviderError
 from app.models.provider import ProviderTarget
 from app.models.requests import ChatCompletionRequest
 from app.models.responses import ChatCompletionResponse
+from app.observability.metrics import GatewayMetrics, gateway_metrics
 from app.providers.litellm_client import LiteLLMService, litellm_service
 from app.reliability.health_tracker import HealthTracker, health_tracker
 
@@ -26,11 +27,13 @@ class RetryManager:
         provider_service: LiteLLMService | None = None,
         sleep_func: Callable[[float], Awaitable[None]] | None = None,
         tracker: HealthTracker | None = None,
+        metrics: GatewayMetrics | None = None,
     ) -> None:
         self.config = config or settings
         self.provider_service = provider_service or litellm_service
         self._sleep = sleep_func or asyncio.sleep
         self.health_tracker = tracker or health_tracker
+        self.metrics = metrics or gateway_metrics
 
     def calculate_backoff(self, attempt: int) -> float:
         """Calculate backoff delay for a given attempt index (0-indexed).
@@ -88,7 +91,20 @@ class RetryManager:
                     request_id=request_id,
                     target=target,
                 )
-                latency_ms = (time.perf_counter() - t0) * 1000.0
+                duration_sec = time.perf_counter() - t0
+                latency_ms = duration_sec * 1000.0
+
+                # Record provider metrics on success
+                self.metrics.provider_requests_total.labels(
+                    provider=target.id,
+                    model=target.model,
+                    status="success",
+                ).inc()
+                self.metrics.provider_duration_seconds.labels(
+                    provider=target.id,
+                    model=target.model,
+                ).observe(duration_sec)
+
                 try:
                     await self.health_tracker.record_attempt(
                         provider_id=target.id,
@@ -103,7 +119,25 @@ class RetryManager:
                     )
                 return response
             except ProviderError as exc:
-                latency_ms = (time.perf_counter() - t0) * 1000.0
+                duration_sec = time.perf_counter() - t0
+                latency_ms = duration_sec * 1000.0
+
+                # Record provider metrics on failure
+                self.metrics.provider_requests_total.labels(
+                    provider=target.id,
+                    model=target.model,
+                    status="error",
+                ).inc()
+                self.metrics.provider_duration_seconds.labels(
+                    provider=target.id,
+                    model=target.model,
+                ).observe(duration_sec)
+                self.metrics.provider_errors_total.labels(
+                    provider=target.id,
+                    model=target.model,
+                    error_category=exc.category or "UNKNOWN",
+                ).inc()
+
                 try:
                     await self.health_tracker.record_attempt(
                         provider_id=target.id,
