@@ -191,3 +191,16 @@ def test_double_counting_failover_scenario() -> None:
     assert 'provider="provider_b"' not in [
         line for line in metrics_text.splitlines() if "gateway_provider_errors_total" in line
     ]
+
+    # E. Reliability Metrics (Phase 14.3a):
+    # 1 retry on Provider A (TIMEOUT)
+    assert 'gateway_retries_total{provider="provider_a",reason="TIMEOUT"} 1.0' in metrics_text
+    # 1 failover from Provider A to Provider B (retry_exhausted)
+    assert (
+        "gateway_failovers_total{"
+        'from_provider="provider_a",reason="retry_exhausted",to_provider="provider_b"} 1.0'
+        in metrics_text
+    )
+
+    # Circuit states
+    assert 'gateway_circuit_state{provider="provider_b",state="closed"} 1.0' in metrics_text

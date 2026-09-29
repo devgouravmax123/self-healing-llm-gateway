@@ -7,6 +7,7 @@ from app.core.exceptions import CircuitBreakerError, ProviderError
 from app.models.provider import ProviderTarget
 from app.models.requests import ChatCompletionRequest
 from app.models.responses import ChatCompletionResponse
+from app.observability.metrics import GatewayMetrics, gateway_metrics
 from app.reliability.circuit_breaker import CircuitBreakerManager, circuit_breaker_manager
 from app.reliability.error_classifier import ErrorCategory
 from app.reliability.retry import RetryManager, retry_manager
@@ -36,12 +37,14 @@ class FailoverManager:
         retry_instance: RetryManager | None = None,
         circuit_instance: CircuitBreakerManager | None = None,
         usage_tracker_instance: UsageTracker | None = None,
+        metrics: GatewayMetrics | None = None,
     ) -> None:
         self.config = config or settings
         self.router = router_instance or default_router
         self.retry_manager = retry_instance or retry_manager
         self.circuit_manager = circuit_instance or circuit_breaker_manager
         self.usage_tracker = usage_tracker_instance or usage_tracker
+        self.metrics = metrics or gateway_metrics
 
     def is_failover_eligible(self, error: Exception) -> bool:
         """Determine if an error is eligible to trigger failover to another provider."""
@@ -82,6 +85,7 @@ class FailoverManager:
         attempted_provider_ids: set[str] = set()
         max_providers = self.config.max_failover_providers
         last_exception: Exception | None = None
+        last_executed_provider_id: str | None = None
 
         while len(attempted_provider_ids) < max_providers:
             # 1. Select next eligible provider target
@@ -127,7 +131,20 @@ class FailoverManager:
                 )
                 last_exception = cb_exc
                 # Try next eligible provider immediately without calling LiteLLM or RetryManager
+                # Note: Circuit-skipped providers did not execute this request and are NOT
+                # counted as failover sources.
                 continue
+
+            # If we previously executed a provider that exhausted retries/failed:
+            if last_executed_provider_id is not None and last_executed_provider_id != target.id:
+                self.metrics.failovers_total.labels(
+                    from_provider=last_executed_provider_id,
+                    to_provider=target.id,
+                    reason="retry_exhausted",
+                ).inc()
+
+            # Mark this target as the last provider that physically attempted execution
+            last_executed_provider_id = target.id
 
             # 3. Execute with retries on this target
             try:
@@ -136,6 +153,7 @@ class FailoverManager:
                     request_id=request_id,
                     target=target,
                 )
+
                 # 4. Success -> notify circuit breaker, record usage, and return response
                 await self.circuit_manager.record_success(target.id)
                 logger.info(

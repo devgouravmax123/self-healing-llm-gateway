@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 
-from prometheus_client import CollectorRegistry, Counter, Histogram
+from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +93,30 @@ class GatewayMetrics:
             "gateway_provider_errors_total",
             "Total number of failed physical provider attempts categorized by error category.",
             labelnames=["provider", "model", "error_category"],
+            registry=self.registry,
+        )
+
+        # 6. Gateway Retries Counter (Phase 14.3a)
+        self.retries_total = Counter(
+            "gateway_retries_total",
+            "Total number of additional provider retry attempts initiated after failure.",
+            labelnames=["provider", "reason"],
+            registry=self.registry,
+        )
+
+        # 7. Gateway Failovers Counter (Phase 14.3a)
+        self.failovers_total = Counter(
+            "gateway_failovers_total",
+            "Total number of provider failover transitions after physical attempt failure.",
+            labelnames=["from_provider", "to_provider", "reason"],
+            registry=self.registry,
+        )
+
+        # 8. Gateway Circuit State Gauge (Phase 14.3a)
+        self.circuit_state = Gauge(
+            "gateway_circuit_state",
+            "Current circuit breaker state per provider (one-hot: closed, open, half_open).",
+            labelnames=["provider", "state"],
             registry=self.registry,
         )
 

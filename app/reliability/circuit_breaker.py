@@ -8,6 +8,7 @@ from redis.exceptions import RedisError
 
 from app.core.config import Settings, settings
 from app.core.exceptions import CircuitBreakerError, ProviderError
+from app.observability.metrics import GatewayMetrics, gateway_metrics
 from app.reliability.error_classifier import ErrorCategory
 from app.storage.circuit_storage import (
     CircuitState,
@@ -35,6 +36,7 @@ class CircuitBreakerManager:
         storage: CircuitStateStorage | None = None,
         redis_mgr: RedisManager | None = None,
         time_func: Callable[[], float] | None = None,
+        metrics: GatewayMetrics | None = None,
     ) -> None:
         self.config = config or settings
         self.redis_mgr = redis_mgr or redis_manager
@@ -42,6 +44,22 @@ class CircuitBreakerManager:
         self._explicit_storage = storage
         self._cached_redis_storage: RedisCircuitStorage | None = None
         self._time_func = time_func
+        self.metrics = metrics or gateway_metrics
+
+    def set_circuit_metric(self, provider_id: str, state: CircuitState) -> None:
+        """Update the one-hot Prometheus circuit state gauge for a provider."""
+        self.metrics.circuit_state.labels(
+            provider=provider_id,
+            state="closed",
+        ).set(1.0 if state == CircuitState.CLOSED else 0.0)
+        self.metrics.circuit_state.labels(
+            provider=provider_id,
+            state="open",
+        ).set(1.0 if state == CircuitState.OPEN else 0.0)
+        self.metrics.circuit_state.labels(
+            provider=provider_id,
+            state="half_open",
+        ).set(1.0 if state == CircuitState.HALF_OPEN else 0.0)
 
     def _get_active_storage(self) -> CircuitStateStorage:
         """Resolve the active storage backend (Redis if available, else in-memory fallback)."""
@@ -113,17 +131,20 @@ class CircuitBreakerManager:
                 state=CircuitState.OPEN,
                 opened_at=calc_opened_at,
             )
+            self.set_circuit_metric(provider_id, CircuitState.OPEN)
         elif allowed and state == CircuitState.HALF_OPEN:
             await self._fallback_storage.update_snapshot(
                 provider_id=provider_id,
                 state=CircuitState.HALF_OPEN,
                 active_probes=1,
             )
+            self.set_circuit_metric(provider_id, CircuitState.HALF_OPEN)
         elif allowed and state == CircuitState.CLOSED:
             await self._fallback_storage.update_snapshot(
                 provider_id=provider_id,
                 state=CircuitState.CLOSED,
             )
+            self.set_circuit_metric(provider_id, CircuitState.CLOSED)
 
         if not allowed:
             if state == CircuitState.OPEN:
@@ -187,6 +208,7 @@ class CircuitBreakerManager:
             consecutive_failures=0,
             active_probes=0,
         )
+        self.set_circuit_metric(provider_id, CircuitState.CLOSED)
         logger.info("Recorded success for provider '%s'", provider_id)
 
     async def record_failure(self, provider_id: str, error: Exception | ProviderError) -> None:
@@ -231,6 +253,7 @@ class CircuitBreakerManager:
                 last_failure_at=current_time,
                 active_probes=0,
             )
+            self.set_circuit_metric(provider_id, CircuitState.OPEN)
             logger.warning(
                 "Provider '%s' circuit state changed to OPEN (failures: %d/%d)",
                 provider_id,
@@ -243,6 +266,7 @@ class CircuitBreakerManager:
                 consecutive_failures=failures,
                 last_failure_at=current_time,
             )
+            self.set_circuit_metric(provider_id, CircuitState.CLOSED)
             logger.warning(
                 "Provider '%s' recorded failure (%d/%d consecutive failures)",
                 provider_id,

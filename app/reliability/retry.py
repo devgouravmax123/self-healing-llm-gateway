@@ -186,6 +186,14 @@ class RetryManager:
 
                 # Calculate backoff delay and wait before next attempt
                 delay = self.calculate_backoff(attempt)
+
+                # Record retry metric (Phase 14.3a) for this additional attempt on the same provider
+                reason_str = exc.category or "UNKNOWN"
+                self.metrics.retries_total.labels(
+                    provider=target.id,
+                    reason=reason_str,
+                ).inc()
+
                 logger.info(
                     "Retrying same provider '%s' for request_id=%s in %.3fs (attempt %d/%d)",
                     target.id,
