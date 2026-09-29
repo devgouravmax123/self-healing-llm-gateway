@@ -174,11 +174,7 @@ class HealthTracker:
 
         # Retrieve current circuit state if not passed explicitly
         if circuit_state is None:
-            c_state_res = self.circuit_mgr.get_state(provider_id)
-            if hasattr(c_state_res, "__await__"):
-                c_state_enum = await c_state_res
-            else:
-                c_state_enum = c_state_res
+            c_state_enum = self.circuit_mgr.get_state(provider_id)
             resolved_circuit_state = (
                 c_state_enum.value if hasattr(c_state_enum, "value") else str(c_state_enum)
             )

@@ -18,6 +18,7 @@ from app.core.request_context import (
     reset_request_id,
     set_request_id,
 )
+from app.db.session import database_manager
 from app.storage.redis import redis_manager
 
 logger = logging.getLogger(__name__)
@@ -26,13 +27,17 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan context manager for startup and shutdown events."""
-    # Startup: Initialize Redis connection pool
-    logger.info("Starting up %s (Phase 09 — Redis Operational State)...", settings.app_name)
+    # Startup: Initialize Redis connection pool and PostgreSQL engine
+    logger.info(
+        "Starting up %s (Phase 11 — PostgreSQL Durable Storage Foundation)...", settings.app_name
+    )
     await redis_manager.initialize()
+    await database_manager.initialize()
     yield
-    # Shutdown: Close Redis connection pool
+    # Shutdown: Close Redis and PostgreSQL connection pools
     logger.info("Shutting down %s and releasing resources...", settings.app_name)
     await redis_manager.close()
+    await database_manager.close()
 
 
 def create_app() -> FastAPI:
