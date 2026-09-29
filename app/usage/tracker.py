@@ -8,6 +8,7 @@ from app.db.repositories.usage_repo import UsageRepository, usage_repository
 from app.models.provider import ProviderTarget
 from app.models.requests import ChatCompletionRequest
 from app.models.responses import ChatCompletionResponse
+from app.observability.metrics import GatewayMetrics, gateway_metrics
 from app.pricing.calculator import CostCalculator, cost_calculator
 
 logger = logging.getLogger(__name__)
@@ -20,9 +21,11 @@ class UsageTracker:
         self,
         calculator: CostCalculator | None = None,
         repository: UsageRepository | None = None,
+        metrics: GatewayMetrics | None = None,
     ) -> None:
         self.calculator = calculator or cost_calculator
         self.repository = repository or usage_repository
+        self.metrics = metrics or gateway_metrics
 
     async def record_usage(
         self,
@@ -41,6 +44,7 @@ class UsageTracker:
         - Tenant ID is bound strictly to the authenticated `tenant_id` (no spoofing).
         - Feature resolved from `request.metadata` (defaulting to 'chat').
         - Database errors are caught and logged without failing the client response.
+        - Prometheus metrics record delivered tokens and positive estimated cost.
         """
         # 1. Extract tokens from response.usage
         input_tokens: int | None = None
@@ -83,7 +87,29 @@ class UsageTracker:
             estimated_cost,
         )
 
-        # 4. Persist to database repository safely
+        # 4. Record Prometheus metrics (Phase 14.3c)
+        # Canonical provider label is target.id to align with all Phase 14 metrics
+        if input_tokens is not None and input_tokens > 0:
+            self.metrics.tokens_total.labels(
+                provider=target.id,
+                model=target.model,
+                type="input",
+            ).inc(input_tokens)
+
+        if output_tokens is not None and output_tokens > 0:
+            self.metrics.tokens_total.labels(
+                provider=target.id,
+                model=target.model,
+                type="output",
+            ).inc(output_tokens)
+
+        if estimated_cost is not None and estimated_cost > 0:
+            self.metrics.estimated_cost_usd_total.labels(
+                provider=target.id,
+                model=target.model,
+            ).inc(float(estimated_cost))
+
+        # 5. Persist to database repository safely
         try:
             await self.repository.create_usage_record(
                 request_id=request_id,

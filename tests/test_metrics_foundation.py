@@ -95,8 +95,8 @@ def test_existing_endpoints_regression() -> None:
     assert root_resp.json()["status"] == "operational"
 
 
-def test_metrics_endpoint_exposes_phase_14_2_14_3a_and_14_3b_metrics() -> None:
-    """Test 6: Verify GET /metrics exposes all Phase 14.2, 14.3a, and 14.3b metric families."""
+def test_metrics_endpoint_exposes_all_phase_14_metrics() -> None:
+    """Test 6: Verify GET /metrics exposes all Phase 14 metric families."""
     app = create_app()
     client = TestClient(app)
 
@@ -114,3 +114,5 @@ def test_metrics_endpoint_exposes_phase_14_2_14_3a_and_14_3b_metrics() -> None:
     assert "gateway_circuit_state" in body
     assert "gateway_auth_failures_total" in body
     assert "gateway_rate_limit_rejections_total" in body
+    assert "gateway_tokens_total" in body
+    assert "gateway_estimated_cost_usd_total" in body

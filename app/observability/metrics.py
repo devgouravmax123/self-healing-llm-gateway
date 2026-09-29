@@ -136,6 +136,22 @@ class GatewayMetrics:
             registry=self.registry,
         )
 
+        # 11. Gateway Tokens Total Counter (Phase 14.3c)
+        self.tokens_total = Counter(
+            "gateway_tokens_total",
+            "Total number of tokens processed for successfully delivered completions.",
+            labelnames=["provider", "model", "type"],
+            registry=self.registry,
+        )
+
+        # 12. Gateway Estimated Cost USD Counter (Phase 14.3c)
+        self.estimated_cost_usd_total = Counter(
+            "gateway_estimated_cost_usd_total",
+            "Total estimated cost in USD for successfully delivered completions.",
+            labelnames=["provider", "model"],
+            registry=self.registry,
+        )
+
     def reset_for_test(self, new_registry: CollectorRegistry | None = None) -> None:
         """Reset internal metrics registry and reinitialize metrics for clean test isolation."""
         self.registry = new_registry if new_registry is not None else create_metrics_registry()
