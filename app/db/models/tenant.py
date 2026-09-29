@@ -8,6 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
+    from app.db.models.api_key import ApiKey
     from app.db.models.request import RequestRecord
     from app.db.models.usage import UsageRecord
 
@@ -28,5 +29,9 @@ class Tenant(Base, TimestampMixin):
     )
     usage_records: Mapped[list["UsageRecord"]] = relationship(
         "UsageRecord",
+        back_populates="tenant",
+    )
+    api_keys: Mapped[list["ApiKey"]] = relationship(
+        "ApiKey",
         back_populates="tenant",
     )

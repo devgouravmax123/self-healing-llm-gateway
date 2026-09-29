@@ -13,10 +13,33 @@ class TestDatabaseModelsMetadata:
     """Test suite verifying declarative models definitions without needing live connection."""
 
     def test_registered_tables(self) -> None:
-        """Verify all Phase 11 tables are registered in Base.metadata."""
+        """Verify all Phase 11 & Phase 13 tables are registered in Base.metadata."""
         table_names = set(Base.metadata.tables.keys())
-        expected = {"tenants", "requests", "usage_records", "provider_events"}
+        expected = {"tenants", "requests", "usage_records", "provider_events", "api_keys"}
         assert expected.issubset(table_names)
+
+    def test_api_key_model_schema(self) -> None:
+        """Verify ApiKey table columns, types, foreign keys, and indexes."""
+        table = Base.metadata.tables["api_keys"]
+        assert table.columns["id"].primary_key is True
+        assert isinstance(table.columns["id"].type, UUID)
+        assert table.columns["tenant_id"].nullable is False
+        assert table.columns["key_prefix"].nullable is False
+        assert table.columns["hashed_key"].nullable is False
+        assert table.columns["hashed_key"].unique is True
+        assert table.columns["status"].nullable is False
+        assert table.columns["is_admin"].nullable is False
+
+        # Verify foreign key to tenants
+        fk = list(table.columns["tenant_id"].foreign_keys)[0]
+        assert fk.column.table.name == "tenants"
+        assert fk.ondelete == "RESTRICT"
+
+        index_names = {idx.name for idx in table.indexes}
+        assert "ix_api_keys_tenant_id" in index_names
+        assert "ix_api_keys_key_prefix" in index_names
+        assert "ix_api_keys_hashed_key" in index_names
+        assert "ix_api_keys_tenant_status" in index_names
 
     def test_tenant_model_schema(self) -> None:
         """Verify Tenant table columns, types, and constraints."""

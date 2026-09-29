@@ -140,6 +140,41 @@ class TestPostgreSQLIntegration:
             await pg_session.commit()
         await pg_session.rollback()
 
+    async def test_api_key_persistence_and_lookup(self, pg_session: AsyncSession) -> None:
+        """Verify persisting and querying ApiKey entity against live PostgreSQL."""
+        from app.core.auth import generate_api_key
+        from app.db.models import ApiKey
+
+        tenant_id = f"tenant_key_{uuid.uuid4().hex[:8]}"
+        tenant = Tenant(id=tenant_id, name="Key Corp", status="active")
+        pg_session.add(tenant)
+        await pg_session.commit()
+
+        full_key, key_prefix, hashed_key = generate_api_key(environment="live")
+
+        api_key = ApiKey(
+            tenant_id=tenant_id,
+            key_prefix=key_prefix,
+            hashed_key=hashed_key,
+            name="Test Prod Key",
+            is_admin=True,
+            status="active",
+        )
+        pg_session.add(api_key)
+        await pg_session.commit()
+
+        # Query back by hashed_key
+        query = text(
+            "SELECT tenant_id, key_prefix, is_admin FROM api_keys "
+            f"WHERE hashed_key = '{hashed_key}'"
+        )
+        result = await pg_session.execute(query)
+        row = result.fetchone()
+        assert row is not None
+        assert row[0] == tenant_id
+        assert row[1] == key_prefix
+        assert row[2] is True
+
 
 class TestAlembicMigrationsIntegration:
     """Test running Alembic upgrade and downgrade against live PostgreSQL."""

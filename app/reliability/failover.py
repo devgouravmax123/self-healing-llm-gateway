@@ -62,6 +62,7 @@ class FailoverManager:
         self,
         request: ChatCompletionRequest,
         request_id: str,
+        tenant_id: str | None = None,
     ) -> ChatCompletionResponse:
         """Execute chat completion with automatic provider failover.
 
@@ -150,6 +151,7 @@ class FailoverManager:
                         request_id=request_id,
                         target=target,
                         response=response,
+                        tenant_id=tenant_id,
                     )
                 except Exception as tracker_exc:
                     logger.warning(

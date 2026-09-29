@@ -83,6 +83,21 @@ def create_app() -> FastAPI:
     @app.exception_handler(GatewayError)
     async def gateway_error_handler(request: Request, exc: GatewayError) -> JSONResponse:
         request_id = request.headers.get("X-Request-ID") or "req_unknown"
+        headers = {"X-Request-ID": request_id}
+
+        # Add rate limit headers if exc is RateLimitError
+        from app.core.exceptions import RateLimitError
+
+        if isinstance(exc, RateLimitError):
+            if exc.retry_after is not None:
+                headers["Retry-After"] = str(exc.retry_after)
+            if exc.limit is not None:
+                headers["X-RateLimit-Limit"] = str(exc.limit)
+            if exc.remaining is not None:
+                headers["X-RateLimit-Remaining"] = str(exc.remaining)
+            if exc.reset_time is not None:
+                headers["X-RateLimit-Reset"] = str(exc.reset_time)
+
         return JSONResponse(
             status_code=exc.status_code,
             content={
@@ -93,7 +108,7 @@ def create_app() -> FastAPI:
                     "request_id": request_id,
                 }
             },
-            headers={"X-Request-ID": request_id},
+            headers=headers,
         )
 
     # Include API Routers

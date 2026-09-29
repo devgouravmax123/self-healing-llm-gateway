@@ -48,5 +48,9 @@ class Settings(BaseSettings):
     # Reliability: Failover Configuration
     max_failover_providers: int = Field(default=3, alias="MAX_FAILOVER_PROVIDERS")
 
+    # Rate Limiting Configuration
+    default_tenant_rpm: int = Field(default=60, alias="DEFAULT_TENANT_RPM")
+    rate_limit_window_seconds: int = Field(default=60, alias="RATE_LIMIT_WINDOW_SECONDS")
+
 
 settings = Settings()
