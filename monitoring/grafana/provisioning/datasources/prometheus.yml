@@ -1,0 +1,19 @@
+# Grafana Datasource Provisioning Configuration
+# Registers the local Prometheus instance as the default datasource.
+#
+# NOTE FOR PHASE 17 DOCKER COMPOSE:
+# Uses 'http://prometheus:9090' which resolves over the internal Docker network.
+# For host-only testing, 'http://localhost:9090' can be used.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 10s
+      httpMethod: POST
