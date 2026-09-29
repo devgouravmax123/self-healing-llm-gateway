@@ -4,6 +4,7 @@ import logging
 
 from app.core.config import Settings, settings
 from app.core.exceptions import CircuitBreakerError, ProviderError
+from app.core.request_context import set_provider_id
 from app.models.provider import ProviderTarget
 from app.models.requests import ChatCompletionRequest
 from app.models.responses import ChatCompletionResponse
@@ -108,15 +109,23 @@ class FailoverManager:
 
             # Mark provider as attempted for this request
             attempted_provider_ids.add(target.id)
+            set_provider_id(target.id)
             current_failover_step = len(attempted_provider_ids)
 
+            # Structured lifecycle event: provider_selected
             logger.info(
-                "Attempting provider '%s' (model='%s') for request_id=%s (provider %d/%d)",
+                "Provider selected: provider=%s, model=%s, request_id=%s (provider %d/%d)",
                 target.id,
                 target.model,
                 request_id,
                 current_failover_step,
                 max_providers,
+                extra={
+                    "event": "provider_selected",
+                    "request_id": request_id,
+                    "provider": target.id,
+                    "model": target.model,
+                },
             )
 
             # 2. Acquire permission from circuit breaker
@@ -142,6 +151,20 @@ class FailoverManager:
                     to_provider=target.id,
                     reason="retry_exhausted",
                 ).inc()
+
+                # Structured lifecycle event: failover_started
+                logger.info(
+                    "Failover started: from_provider=%s, to_provider=%s, request_id=%s",
+                    last_executed_provider_id,
+                    target.id,
+                    request_id,
+                    extra={
+                        "event": "failover_started",
+                        "request_id": request_id,
+                        "provider": target.id,
+                        "model": target.model,
+                    },
+                )
 
             # Mark this target as the last provider that physically attempted execution
             last_executed_provider_id = target.id

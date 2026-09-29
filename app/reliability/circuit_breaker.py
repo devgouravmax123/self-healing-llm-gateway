@@ -254,11 +254,17 @@ class CircuitBreakerManager:
                 active_probes=0,
             )
             self.set_circuit_metric(provider_id, CircuitState.OPEN)
+
+            # Structured lifecycle event: circuit_opened
             logger.warning(
                 "Provider '%s' circuit state changed to OPEN (failures: %d/%d)",
                 provider_id,
                 failures,
                 threshold,
+                extra={
+                    "event": "circuit_opened",
+                    "provider": provider_id,
+                },
             )
         else:
             await self._fallback_storage.update_snapshot(

@@ -165,6 +165,23 @@ class RetryManager:
                     exc.status_code,
                 )
 
+                # If the error is a timeout, emit provider_timeout structured event
+                if exc.category == "TIMEOUT":
+                    logger.warning(
+                        "Provider timed out: provider=%s, model=%s, request_id=%s, latency=%.3fs",
+                        target.id,
+                        target.model,
+                        request_id,
+                        duration_sec,
+                        extra={
+                            "event": "provider_timeout",
+                            "request_id": request_id,
+                            "provider": target.id,
+                            "model": target.model,
+                            "latency": duration_sec,
+                        },
+                    )
+
                 # If the error is not retryable, do not retry further
                 if not exc.retryable:
                     logger.info(
@@ -194,13 +211,23 @@ class RetryManager:
                     reason=reason_str,
                 ).inc()
 
+                # Structured lifecycle event: retry_started
                 logger.info(
-                    "Retrying same provider '%s' for request_id=%s in %.3fs (attempt %d/%d)",
+                    "Retry started: provider=%s, model=%s, request_id=%s, "
+                    "attempt=%d, error_type=%s",
                     target.id,
+                    target.model,
                     request_id,
-                    delay,
                     attempt_number + 1,
-                    total_attempts,
+                    reason_str,
+                    extra={
+                        "event": "retry_started",
+                        "request_id": request_id,
+                        "provider": target.id,
+                        "model": target.model,
+                        "attempt": attempt_number + 1,
+                        "error_type": reason_str,
+                    },
                 )
                 await self._sleep(delay)
 

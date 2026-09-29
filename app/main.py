@@ -15,17 +15,31 @@ from app.api.routes_health import router as health_router
 from app.api.routes_metrics import router as metrics_router
 from app.core.config import settings
 from app.core.exceptions import GatewayError
+from app.core.logging import setup_logging
 from app.core.request_context import (
     generate_request_id,
+    get_feature,
+    get_provider_id,
+    get_request_id,
     get_requested_model,
+    get_tenant_id,
+    reset_feature,
+    reset_provider_id,
     reset_request_id,
     reset_requested_model,
+    reset_tenant_id,
+    set_feature,
+    set_provider_id,
     set_request_id,
     set_requested_model,
+    set_tenant_id,
 )
 from app.db.session import database_manager
 from app.observability.metrics import gateway_metrics
 from app.storage.redis import redis_manager
+
+# Initialize structured JSON logging exactly once on module load
+setup_logging()
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +93,9 @@ def create_app() -> FastAPI:
         request_id = request.headers.get("X-Request-ID") or generate_request_id()
         id_token = set_request_id(request_id)
         model_token = set_requested_model("")
+        tenant_token = set_tenant_id("")
+        feature_token = set_feature("")
+        provider_token = set_provider_id("")
 
         is_chat_request = request.url.path == "/v1/chat/completions"
         start_time = time.perf_counter() if is_chat_request else 0.0
@@ -109,11 +126,14 @@ def create_app() -> FastAPI:
         finally:
             reset_request_id(id_token)
             reset_requested_model(model_token)
+            reset_tenant_id(tenant_token)
+            reset_feature(feature_token)
+            reset_provider_id(provider_token)
 
     # Exception Handlers
     @app.exception_handler(GatewayError)
     async def gateway_error_handler(request: Request, exc: GatewayError) -> JSONResponse:
-        request_id = request.headers.get("X-Request-ID") or "req_unknown"
+        request_id = request.headers.get("X-Request-ID") or get_request_id() or "req_unknown"
         headers = {"X-Request-ID": request_id}
 
         # Add rate limit headers if exc is RateLimitError
@@ -129,12 +149,31 @@ def create_app() -> FastAPI:
             if exc.reset_time is not None:
                 headers["X-RateLimit-Reset"] = str(exc.reset_time)
 
+        # Structured lifecycle event: request_failed
+        error_type = type(exc).__name__
+        model_str = getattr(request.state, "requested_model", None) or get_requested_model() or None
+        logger.warning(
+            "Request failed: request_id=%s, error_type=%s, status_code=%d",
+            request_id,
+            error_type,
+            exc.status_code,
+            extra={
+                "event": "request_failed",
+                "request_id": request_id,
+                "tenant_id": get_tenant_id() or None,
+                "feature": get_feature() or None,
+                "provider": get_provider_id() or None,
+                "model": model_str,
+                "error_type": error_type,
+            },
+        )
+
         return JSONResponse(
             status_code=exc.status_code,
             content={
                 "error": {
                     "message": exc.message,
-                    "type": type(exc).__name__,
+                    "type": error_type,
                     "details": exc.details,
                     "request_id": request_id,
                 }

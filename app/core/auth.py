@@ -12,6 +12,7 @@ from fastapi import Depends, Header
 
 from app.core.auth_context import TenantContext
 from app.core.exceptions import AuthenticationError, GatewayError, PermissionDeniedError
+from app.core.request_context import set_tenant_id
 from app.db.base import utc_now
 from app.db.repositories.api_key_repo import ApiKeyRepository, api_key_repository
 from app.observability.metrics import GatewayMetrics, gateway_metrics
@@ -102,6 +103,7 @@ class Authenticator:
         if tenant is None or tenant.status != "active":
             raise PermissionDeniedError(message="Tenant account is inactive or disabled")
 
+        set_tenant_id(tenant.id)
         return TenantContext(
             tenant_id=tenant.id,
             tenant_name=tenant.name,
@@ -132,7 +134,9 @@ async def get_authenticated_tenant(
         raise AuthenticationError(message="Invalid authentication scheme or malformed header")
 
     api_key = parts[1].strip()
-    return await authenticator.authenticate_key(api_key)
+    ctx = await authenticator.authenticate_key(api_key)
+    set_tenant_id(ctx.tenant_id)
+    return ctx
 
 
 async def require_admin_auth(
