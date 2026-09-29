@@ -120,6 +120,22 @@ class GatewayMetrics:
             registry=self.registry,
         )
 
+        # 9. Gateway Authentication Failures Counter (Phase 14.3b)
+        self.auth_failures_total = Counter(
+            "gateway_auth_failures_total",
+            "Total number of authentication failures by bounded failure reason.",
+            labelnames=["reason"],
+            registry=self.registry,
+        )
+
+        # 10. Gateway Rate Limit Rejections Counter (Phase 14.3b)
+        self.rate_limit_rejections_total = Counter(
+            "gateway_rate_limit_rejections_total",
+            "Total number of requests rejected due to tenant rate limits.",
+            labelnames=["reason"],
+            registry=self.registry,
+        )
+
     def reset_for_test(self, new_registry: CollectorRegistry | None = None) -> None:
         """Reset internal metrics registry and reinitialize metrics for clean test isolation."""
         self.registry = new_registry if new_registry is not None else create_metrics_registry()

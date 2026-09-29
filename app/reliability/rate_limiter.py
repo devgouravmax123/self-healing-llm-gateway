@@ -11,6 +11,7 @@ from redis.exceptions import RedisError
 
 from app.core.config import Settings, settings
 from app.core.exceptions import RateLimitError
+from app.observability.metrics import GatewayMetrics, gateway_metrics
 from app.storage.redis import RedisManager, redis_manager
 
 logger = logging.getLogger(__name__)
@@ -71,10 +72,12 @@ class RateLimiter:
         config: Settings | None = None,
         redis_mgr: RedisManager | None = None,
         time_func: Any = None,
+        metrics: GatewayMetrics | None = None,
     ) -> None:
         self.config = config or settings
         self.redis_mgr = redis_mgr or redis_manager
         self.time_func = time_func or time.time
+        self.metrics = metrics or gateway_metrics
 
     async def check_rate_limit(
         self,
@@ -140,6 +143,9 @@ class RateLimiter:
                     remaining,
                 )
                 return
+
+            # Record rate limit rejection metric (Phase 14.3b)
+            self.metrics.rate_limit_rejections_total.labels(reason="limit_exceeded").inc()
 
             logger.warning(
                 "rate_limit.rejected: tenant_id=%s exceeded limit=%d (retry_after=%ds)",

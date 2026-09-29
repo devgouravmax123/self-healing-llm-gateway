@@ -14,6 +14,7 @@ from app.core.auth_context import TenantContext
 from app.core.exceptions import AuthenticationError, GatewayError, PermissionDeniedError
 from app.db.base import utc_now
 from app.db.repositories.api_key_repo import ApiKeyRepository, api_key_repository
+from app.observability.metrics import GatewayMetrics, gateway_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +50,13 @@ def verify_hash(api_key: str, expected_hash: str) -> bool:
 class Authenticator:
     """Validates API keys against PostgreSQL durable storage and resolves TenantContext."""
 
-    def __init__(self, repo: ApiKeyRepository | None = None) -> None:
+    def __init__(
+        self,
+        repo: ApiKeyRepository | None = None,
+        metrics: GatewayMetrics | None = None,
+    ) -> None:
         self.repo = repo or api_key_repository
+        self.metrics = metrics or gateway_metrics
 
     async def authenticate_key(self, api_key: str) -> TenantContext:
         """Authenticate a plaintext API key and resolve the associated TenantContext.
@@ -61,6 +67,7 @@ class Authenticator:
             GatewayError (500): if database access fails.
         """
         if not api_key or not isinstance(api_key, str) or not api_key.strip():
+            self.metrics.auth_failures_total.labels(reason="missing_credentials").inc()
             raise AuthenticationError(message="Authentication required")
 
         hashed_key = hash_api_key(api_key.strip())
@@ -76,15 +83,18 @@ class Authenticator:
 
         if key_record is None:
             # Safe generic error message without leaking key existence
+            self.metrics.auth_failures_total.labels(reason="invalid_credentials").inc()
             raise AuthenticationError(message="Invalid authentication credentials")
 
         # Check key status
         if key_record.status != "active":
+            self.metrics.auth_failures_total.labels(reason="invalid_credentials").inc()
             raise AuthenticationError(message="Invalid authentication credentials")
 
         # Check expiration
         now = utc_now()
         if key_record.expires_at is not None and key_record.expires_at <= now:
+            self.metrics.auth_failures_total.labels(reason="expired_key").inc()
             raise AuthenticationError(message="Invalid authentication credentials")
 
         # Check tenant status
@@ -113,10 +123,12 @@ async def get_authenticated_tenant(
     Extracts Bearer token from 'Authorization' header and resolves TenantContext.
     """
     if not authorization:
+        authenticator.metrics.auth_failures_total.labels(reason="missing_credentials").inc()
         raise AuthenticationError(message="Authentication required")
 
     parts = authorization.strip().split(" ", 1)
     if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1].strip():
+        authenticator.metrics.auth_failures_total.labels(reason="malformed_header").inc()
         raise AuthenticationError(message="Invalid authentication scheme or malformed header")
 
     api_key = parts[1].strip()
