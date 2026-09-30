@@ -1196,7 +1196,7 @@ Potential data includes:
 
 \* Audit records
 
-\* Historical provider events
+\* Historical provider events (schema defined for optional historical storage; runtime telemetry is handled via logs/metrics/traces)
 
 \* Configuration that must survive restarts
 

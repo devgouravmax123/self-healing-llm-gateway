@@ -890,9 +890,9 @@ Add durable storage for historical information.
 
 \* \[ ] Create usage table.
 
-\* \[ ] Create provider event table.
+\* \[ ] Create provider event table/schema.
 
-\* \[ ] Create audit/event history where needed.
+\* \[ ] Optional: implement durable runtime provider-event history.
 
 \* \[ ] Create initial migration.
 

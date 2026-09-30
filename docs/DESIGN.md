@@ -2016,6 +2016,8 @@ metadata
 
 High-volume operational metrics should remain in Prometheus/Redis rather than forcing every event into PostgreSQL.
 
+> **Implementation Note**: The PostgreSQL `provider_events` table and schema exist for optional durable auditing. The current runtime does not write provider lifecycle/failure events into this table, keeping the critical request and reliability path completely insulated from database latency or outages. Operational telemetry (timeouts, retries, circuit transitions, and failovers) is delivered in real time via structured logs, Prometheus metrics, and OpenTelemetry spans.
+
 
 
 \---
