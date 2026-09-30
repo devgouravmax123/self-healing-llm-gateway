@@ -1,0 +1,56 @@
+services:
+  # Primary Ollama instance for multi-container physical failover demonstration
+  ollama-primary:
+    image: ollama/ollama:latest
+    container_name: llm-gateway-ollama-primary
+    restart: unless-stopped
+    volumes:
+      - ollama_primary_data:/root/.ollama
+    networks:
+      - gateway-network
+    healthcheck:
+      test: ["CMD-SHELL", "ollama --version || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Secondary Ollama instance for multi-container physical failover demonstration
+  ollama-secondary:
+    image: ollama/ollama:latest
+    container_name: llm-gateway-ollama-secondary
+    restart: unless-stopped
+    volumes:
+      - ollama_secondary_data:/root/.ollama
+    networks:
+      - gateway-network
+    healthcheck:
+      test: ["CMD-SHELL", "ollama --version || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Gateway environment overrides for the physical failover demonstration
+  gateway:
+    environment:
+      PROVIDER_TARGETS_JSON: >-
+        [
+          {"id": "ollama_primary", "provider": "ollama", "model": "qwen2.5:3b", "api_base": "http://ollama-primary:11434", "priority": 1, "enabled": true},
+          {"id": "ollama_secondary", "provider": "ollama", "model": "qwen2.5:3b", "api_base": "http://ollama-secondary:11434", "priority": 2, "enabled": true}
+        ]
+      CIRCUIT_FAILURE_THRESHOLD: 2
+      CIRCUIT_COOLDOWN_SECONDS: 5.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama-primary:
+        condition: service_healthy
+      ollama-secondary:
+        condition: service_healthy
+
+volumes:
+  ollama_primary_data:
+    name: llm-gateway-ollama-primary-data
+  ollama_secondary_data:
+    name: llm-gateway-ollama-secondary-data

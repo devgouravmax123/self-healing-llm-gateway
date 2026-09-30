@@ -193,3 +193,79 @@ async def test_chat_completions_endpoint_no_providers_returns_503() -> None:
             assert "error" in data
             assert data["error"]["type"] == "NoHealthyProviderError"
             assert response.headers["X-Request-ID"] == "req_503_test"
+
+
+def test_provider_registry_from_settings_with_valid_targets_json() -> None:
+    """Verify provider registry loads valid PROVIDER_TARGETS_JSON successfully."""
+    valid_json = (
+        "[\n"
+        '  {"id": "ollama_primary", "provider": "ollama", "model": "qwen2.5:3b", '
+        '"api_base": "http://ollama-primary:11434", "priority": 1, "enabled": true},\n'
+        '  {"id": "ollama_secondary", "provider": "ollama", "model": "qwen2.5:3b", '
+        '"api_base": "http://ollama-secondary:11434", "priority": 2, "enabled": true}\n'
+        "]"
+    )
+    custom_settings = Settings(PROVIDER_TARGETS_JSON=valid_json)
+    registry = ProviderRegistry.from_settings(custom_settings)
+    targets = registry.list_all()
+    assert len(targets) == 2
+    assert targets[0].id == "ollama_primary"
+    assert targets[0].priority == 1
+    assert targets[0].api_base == "http://ollama-primary:11434"
+    assert targets[1].id == "ollama_secondary"
+    assert targets[1].priority == 2
+    assert targets[1].api_base == "http://ollama-secondary:11434"
+
+
+def test_provider_registry_rejects_malformed_targets_json() -> None:
+    """Verify provider registry raises ValueError for invalid JSON syntax."""
+    with pytest.raises(ValueError, match="is not valid JSON"):
+        ProviderRegistry.from_settings(Settings(PROVIDER_TARGETS_JSON="{bad_json}"))
+
+
+def test_provider_registry_rejects_non_list_targets_json() -> None:
+    """Verify provider registry raises ValueError when JSON is not a list."""
+    with pytest.raises(ValueError, match="must be a JSON array"):
+        ProviderRegistry.from_settings(Settings(PROVIDER_TARGETS_JSON='{"id": "p1"}'))
+
+
+def test_provider_registry_rejects_empty_targets_json() -> None:
+    """Verify provider registry raises ValueError when JSON array is empty."""
+    with pytest.raises(ValueError, match="array cannot be empty"):
+        ProviderRegistry.from_settings(Settings(PROVIDER_TARGETS_JSON="[]"))
+
+
+def test_provider_registry_rejects_duplicate_target_ids() -> None:
+    """Verify provider registry raises ValueError when duplicate target IDs are defined."""
+    dup_json = (
+        "["
+        '  {"id": "ollama_dup", "provider": "ollama", "model": "qwen2.5:3b", "api_base": "http://p1:11434"},'
+        '  {"id": "ollama_dup", "provider": "ollama", "model": "qwen2.5:3b", "api_base": "http://p2:11434"}'
+        "]"
+    )
+    with pytest.raises(ValueError, match="duplicate target ID 'ollama_dup'"):
+        ProviderRegistry.from_settings(Settings(PROVIDER_TARGETS_JSON=dup_json))
+
+
+def test_provider_registry_rejects_invalid_api_base_url() -> None:
+    """Verify provider registry raises ValueError when api_base has an invalid scheme or format."""
+    bad_url_json = (
+        "["
+        '  {"id": "ollama_1", "provider": "ollama", "model": "qwen2.5:3b", "api_base": "ftp://bad-url:11434"}'
+        "]"
+    )
+    with pytest.raises(ValueError, match="Must be a valid http:// or https:// URL"):
+        ProviderRegistry.from_settings(Settings(PROVIDER_TARGETS_JSON=bad_url_json))
+
+
+def test_provider_registry_rejects_invalid_priority_or_empty_fields() -> None:
+    """Verify provider registry raises ValueError when required fields are empty or priority < 1."""
+    bad_priority_json = (
+        '[  {"id": "ollama_1", "provider": "ollama", "model": "qwen2.5:3b", "priority": 0}]'
+    )
+    with pytest.raises(ValueError, match="must be integer >= 1"):
+        ProviderRegistry.from_settings(Settings(PROVIDER_TARGETS_JSON=bad_priority_json))
+
+    empty_model_json = '[  {"id": "ollama_1", "provider": "ollama", "model": "   "}]'
+    with pytest.raises(ValueError, match="invalid or empty 'model'"):
+        ProviderRegistry.from_settings(Settings(PROVIDER_TARGETS_JSON=empty_model_json))

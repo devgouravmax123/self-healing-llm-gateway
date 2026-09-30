@@ -62,5 +62,8 @@ class Settings(BaseSettings):
     chaos_enabled: bool = Field(default=False, alias="CHAOS_ENABLED")
     admin_api_key: str | None = Field(default=None, alias="ADMIN_API_KEY")
 
+    # Multi-target / Physical Failover Overrides
+    provider_targets_json: str | None = Field(default=None, alias="PROVIDER_TARGETS_JSON")
+
 
 settings = Settings()
