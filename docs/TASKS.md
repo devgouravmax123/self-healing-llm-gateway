@@ -1570,7 +1570,29 @@ Automate basic project quality checks.
 
 
 
-Demonstrate the project's central capability.
+Demonstrate the project's central capability across five canonical scenarios.
+
+
+
+\## Tasks
+
+
+
+\* \[x] Create deterministic automated E2E reliability test suite (`tests/test_e2e_reliability.py`).
+
+\* \[x] Verify Scenario A (Healthy request execution).
+
+\* \[x] Verify Scenario B (Provider failure and automatic failover).
+
+\* \[x] Verify Scenario C (Circuit breaker trips to OPEN).
+
+\* \[x] Verify Scenario D (Circuit recovery via HALF-OPEN probe).
+
+\* \[x] Verify Scenario E (All providers unavailable bounded error).
+
+\* \[x] Create live demonstration script (`scripts/demo_e2e_reliability.py`).
+
+\* \[x] Create operational documentation (`docs/E2E_DEMO.md`).
 
 
 
