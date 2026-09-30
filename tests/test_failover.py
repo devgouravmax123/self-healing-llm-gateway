@@ -465,3 +465,58 @@ async def test_chat_completions_endpoint_end_to_end_failover() -> None:
             )
             assert response.headers["X-Request-ID"] == custom_id
             assert mock_retry.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_failover_single_usage_tracker_call_with_timing() -> None:
+    """Verify execute_with_failover calls usage_tracker exactly once with accurate timing."""
+    from app.db.base import utc_now
+    from app.usage.tracker import UsageTracker
+
+    registry = ProviderRegistry()
+    p_a = ProviderTarget(id="provider_a", provider="ollama", model="qwen2.5:3b", priority=1)
+    registry.register(p_a)
+
+    cb_manager = CircuitBreakerManager()
+    router = Router(registry=registry, circuit_manager=cb_manager)
+
+    mock_retry_manager = AsyncMock(spec=RetryManager)
+    test_resp = create_test_response("Direct response")
+    mock_retry_manager.execute_with_retry.return_value = test_resp
+
+    mock_usage_tracker = AsyncMock(spec=UsageTracker)
+
+    failover = FailoverManager(
+        config=Settings(MAX_FAILOVER_PROVIDERS=1),
+        router_instance=router,
+        retry_instance=mock_retry_manager,
+        circuit_instance=cb_manager,
+        usage_tracker_instance=mock_usage_tracker,
+    )
+
+    t_start = utc_now()
+    req = ChatCompletionRequest(
+        model="qwen2.5:3b",
+        messages=[ChatMessage(role="user", content="Test single tracker")],
+    )
+
+    res = await failover.execute_with_failover(
+        request=req,
+        request_id="req_single_track",
+        tenant_id="tenant_track_1",
+        started_at=t_start,
+    )
+
+    assert res == test_resp
+    assert mock_usage_tracker.record_usage.call_count == 1
+    call_kwargs = mock_usage_tracker.record_usage.call_args.kwargs
+    assert call_kwargs["request"] == req
+    assert call_kwargs["request_id"] == "req_single_track"
+    assert call_kwargs["target"] == p_a
+    assert call_kwargs["response"] == test_resp
+    assert call_kwargs["tenant_id"] == "tenant_track_1"
+    assert call_kwargs["started_at"] == t_start
+    assert call_kwargs["completed_at"] is not None
+    assert call_kwargs["completed_at"] >= t_start
+    assert call_kwargs["latency_ms"] is not None
+    assert call_kwargs["latency_ms"] >= 0.0

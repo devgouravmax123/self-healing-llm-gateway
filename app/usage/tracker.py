@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
 from app.db.repositories.usage_repo import UsageRepository, usage_repository
 from app.models.provider import ProviderTarget
@@ -35,6 +36,9 @@ class UsageTracker:
         target: ProviderTarget,
         response: ChatCompletionResponse,
         tenant_id: str | None = None,
+        started_at: datetime | None = None,
+        latency_ms: float | None = None,
+        completed_at: datetime | None = None,
     ) -> None:
         """Extract usage from completion response, calculate estimated cost, and persist safely.
 
@@ -133,6 +137,9 @@ class UsageTracker:
                     total_tokens=total_tokens,
                     estimated_cost=estimated_cost,
                     requested_model=request.model,
+                    started_at=started_at,
+                    latency_ms=latency_ms,
+                    completed_at=completed_at,
                 )
             except Exception as exc:
                 logger.warning("Usage tracking error for request_id=%s: %s", request_id, exc)

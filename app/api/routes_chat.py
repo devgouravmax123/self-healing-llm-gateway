@@ -15,6 +15,7 @@ from app.core.request_context import (
     set_requested_model,
     set_tenant_id,
 )
+from app.db.base import utc_now
 from app.models.requests import ChatCompletionRequest
 from app.models.responses import ChatCompletionResponse
 from app.reliability.circuit_breaker import circuit_breaker_manager
@@ -40,6 +41,7 @@ async def create_chat_completion(
     http_request: Request,
 ) -> ChatCompletionResponse:
     """Handle chat completion request with authentication, rate limiting, and failover."""
+    started_at = utc_now()
     request_id = get_request_id() or "req_chatcmpl"
     set_requested_model(request.model)
     set_tenant_id(tenant_context.tenant_id)
@@ -94,6 +96,7 @@ async def create_chat_completion(
             request=request,
             request_id=request_id,
             tenant_id=tenant_context.tenant_id,
+            started_at=started_at,
         )
         latency_sec = time.perf_counter() - t_start
 

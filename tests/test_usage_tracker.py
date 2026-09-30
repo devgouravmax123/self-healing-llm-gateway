@@ -79,6 +79,9 @@ class TestUsageTracker:
             total_tokens=1500,
             estimated_cost=Decimal("0.007500"),
             requested_model="gpt-4o",
+            started_at=None,
+            latency_ms=None,
+            completed_at=None,
         )
 
     @pytest.mark.asyncio
@@ -123,6 +126,9 @@ class TestUsageTracker:
             total_tokens=None,
             estimated_cost=None,
             requested_model="custom-model",
+            started_at=None,
+            latency_ms=None,
+            completed_at=None,
         )
 
     @pytest.mark.asyncio
@@ -171,6 +177,9 @@ class TestUsageTracker:
             total_tokens=None,
             estimated_cost=Decimal("0.000000"),
             requested_model="ollama-model",
+            started_at=None,
+            latency_ms=None,
+            completed_at=None,
         )
 
     @pytest.mark.asyncio
@@ -204,4 +213,61 @@ class TestUsageTracker:
             request_id="req_test_safe",
             target=target,
             response=resp,
+        )
+
+    @pytest.mark.asyncio
+    async def test_timing_and_timestamps_forwarded(self) -> None:
+        """Verify timing metrics are forwarded unchanged to usage repository."""
+        from datetime import UTC, datetime
+
+        mock_repo = AsyncMock()
+        tracker = UsageTracker(repository=mock_repo)
+
+        req = ChatCompletionRequest(
+            model="gpt-4o",
+            messages=[ChatMessage(role="user", content="Hi")],
+            metadata={"tenant_id": "tenant_xyz"},
+        )
+        target = ProviderTarget(
+            id="openai_primary",
+            provider="openai",
+            model="gpt-4o",
+            enabled=True,
+            priority=1,
+        )
+        resp = ChatCompletionResponse(
+            id="chatcmpl-test-fwd",
+            model="gpt-4o",
+            choices=[],
+            usage=CompletionUsage(prompt_tokens=5, completion_tokens=10, total_tokens=15),
+        )
+
+        t_start = datetime(2026, 10, 1, 15, 29, 58, tzinfo=UTC)
+        t_comp = datetime(2026, 10, 1, 15, 30, 0, tzinfo=UTC)
+        await tracker.record_usage(
+            request=req,
+            request_id="req_test_fwd",
+            target=target,
+            response=resp,
+            started_at=t_start,
+            latency_ms=88.5,
+            completed_at=t_comp,
+        )
+
+        mock_repo.create_usage_record.assert_awaited_once_with(
+            request_id="req_test_fwd",
+            provider="openai",
+            model="gpt-4o",
+            tenant_id="tenant_xyz",
+            feature="chat",
+            input_tokens=5,
+            output_tokens=10,
+            total_tokens=15,
+            estimated_cost=tracker.calculator.calculate_cost(
+                provider="openai", model="gpt-4o", input_tokens=5, output_tokens=10
+            ),
+            requested_model="gpt-4o",
+            started_at=t_start,
+            latency_ms=88.5,
+            completed_at=t_comp,
         )

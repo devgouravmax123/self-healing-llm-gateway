@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import select
 
+from app.db.base import utc_now
 from app.db.models.request import RequestRecord
 from app.db.models.usage import UsageRecord
 from app.db.session import DatabaseManager, database_manager
@@ -32,6 +34,9 @@ class UsageRepository:
         total_tokens: int | None = None,
         estimated_cost: Decimal | None = None,
         requested_model: str | None = None,
+        started_at: datetime | None = None,
+        latency_ms: float | None = None,
+        completed_at: datetime | None = None,
     ) -> UsageRecord | None:
         """Persist a UsageRecord safely to PostgreSQL.
 
@@ -47,7 +52,7 @@ class UsageRepository:
                 req = res.scalar_one_or_none()
 
                 if req is None:
-                    # Create placeholder RequestRecord
+                    # Create RequestRecord
                     req = RequestRecord(
                         request_id=request_id,
                         tenant_id=tenant_id,
@@ -56,9 +61,20 @@ class UsageRepository:
                         final_provider=provider,
                         final_model=model,
                         status="success",
+                        started_at=started_at or utc_now(),
+                        completed_at=completed_at or utc_now(),
+                        latency_ms=latency_ms,
                     )
                     session.add(req)
                     await session.flush()
+                else:
+                    # Populate started_at, completed_at, and latency_ms if currently unset
+                    if req.started_at is None and started_at is not None:
+                        req.started_at = started_at
+                    if req.completed_at is None:
+                        req.completed_at = completed_at or utc_now()
+                    if req.latency_ms is None and latency_ms is not None:
+                        req.latency_ms = latency_ms
 
                 # 2. Check for duplicate/existing UsageRecord for idempotency
                 usage_stmt = select(UsageRecord).where(UsageRecord.request_id == request_id)

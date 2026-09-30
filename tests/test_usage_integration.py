@@ -166,3 +166,59 @@ class TestUsageIntegration:
         assert row[1] is None
         assert row[2] is None
         assert row[3] is None
+
+    async def test_live_request_record_completion_and_latency(
+        self, pg_session: AsyncSession
+    ) -> None:
+        """Verify successful usage tracking persists RequestRecord with timing."""
+        from datetime import UTC, datetime
+
+        req_id = f"req_{uuid.uuid4().hex[:12]}"
+        req = ChatCompletionRequest(
+            model="gpt-4o",
+            messages=[ChatMessage(role="user", content="Timing test")],
+            metadata={"tenant_id": "tenant_test_1", "feature": "timing_test"},
+        )
+        target = ProviderTarget(
+            id="openai_prod",
+            provider="openai",
+            model="gpt-4o",
+            enabled=True,
+            priority=1,
+        )
+        resp = ChatCompletionResponse(
+            id=f"chatcmpl-{req_id}",
+            model="gpt-4o",
+            choices=[
+                ChatCompletionChoice(
+                    message=ChatCompletionMessageResponse(role="assistant", content="Done")
+                )
+            ],
+            usage=CompletionUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        )
+
+        t_complete = datetime.now(UTC)
+        await usage_tracker.record_usage(
+            request=req,
+            request_id=req_id,
+            target=target,
+            response=resp,
+            latency_ms=145.25,
+            completed_at=t_complete,
+        )
+
+        sql = (
+            "SELECT request_id, status, started_at, completed_at, latency_ms "
+            f"FROM requests WHERE request_id = '{req_id}'"
+        )
+        result = await pg_session.execute(text(sql))
+        row = result.fetchone()
+        assert row is not None
+        assert row[0] == req_id
+        assert row[1] == "success"
+        assert row[2] is not None  # started_at
+        assert row[3] is not None  # completed_at
+        assert row[3] >= row[2]  # completed_at >= started_at
+        assert row[4] is not None  # latency_ms
+        assert row[4] > 0  # latency_ms > 0
+        assert row[4] == 145.25

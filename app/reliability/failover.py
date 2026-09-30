@@ -1,10 +1,13 @@
 """Failover orchestrator for resilient multi-provider LLM execution."""
 
 import logging
+import time
+from datetime import datetime
 
 from app.core.config import Settings, settings
 from app.core.exceptions import CircuitBreakerError, ProviderError
 from app.core.request_context import set_provider_id
+from app.db.base import utc_now
 from app.models.provider import ProviderTarget
 from app.models.requests import ChatCompletionRequest
 from app.models.responses import ChatCompletionResponse
@@ -67,6 +70,7 @@ class FailoverManager:
         request: ChatCompletionRequest,
         request_id: str,
         tenant_id: str | None = None,
+        started_at: datetime | None = None,
     ) -> ChatCompletionResponse:
         """Execute chat completion with automatic provider failover.
 
@@ -83,6 +87,8 @@ class FailoverManager:
            - Exclude failed provider and select next candidate if under limit.
         6. If all candidates exhausted, raise final error (or NoHealthyProviderError).
         """
+        t_start = time.perf_counter()
+        req_started_at = started_at or utc_now()
         attempted_provider_ids: set[str] = set()
         max_providers = self.config.max_failover_providers
         last_exception: Exception | None = None
@@ -217,6 +223,11 @@ class FailoverManager:
                     request_id,
                 )
 
+                # Calculate authoritative elapsed latency and completion timestamp
+                latency_sec = time.perf_counter() - t_start
+                completed_at = utc_now()
+                latency_ms = latency_sec * 1000.0
+
                 # Record usage safely (guaranteed non-blocking / non-failing)
                 try:
                     await self.usage_tracker.record_usage(
@@ -225,6 +236,9 @@ class FailoverManager:
                         target=target,
                         response=response,
                         tenant_id=tenant_id,
+                        started_at=req_started_at,
+                        latency_ms=latency_ms,
+                        completed_at=completed_at,
                     )
                 except Exception as tracker_exc:
                     logger.warning(
