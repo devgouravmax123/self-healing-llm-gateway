@@ -100,7 +100,31 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 
 ---
 
-## 5. Teardown and Cleanup
+## 5. Running Integration Tests inside Compose Network
+
+Because PostgreSQL (`5432`) and Redis (`6379`) are isolated inside the private `llm-gateway-network` bridge with no host-published ports, running `pytest` directly from the host executes 257 tests and cleanly skips the 17 live database/Redis integration tests.
+
+To run the complete test suite—including all 17 live PostgreSQL, Redis, Alembic migration, and usage tracking integration tests—execute pytest inside an ephemeral container on the Compose network with isolated test state:
+
+```bash
+docker run --rm \
+  --network llm-gateway-network \
+  -v "${PWD}:/app" \
+  -w /app \
+  -e DATABASE_URL="postgresql+asyncpg://postgres:postgres@postgres:5432/llm_gateway_test" \
+  -e REDIS_URL="redis://redis:6379/15" \
+  -e UV_PROJECT_ENVIRONMENT=/tmp/venv \
+  ghcr.io/astral-sh/uv:python3.12-bookworm-slim \
+  sh -c "uv sync --frozen --extra dev && uv run pytest -q"
+```
+
+- **Target Database**: `llm_gateway_test` (isolated from the running application's `llm_gateway` database).
+- **Target Redis DB**: Logical DB `15` (isolated from the application's runtime operational DB `0`).
+- **Results**: **274 passed** (0 skipped, 0 failed).
+
+---
+
+## 6. Teardown and Cleanup
 
 To stop and remove containers:
 

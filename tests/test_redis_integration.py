@@ -3,17 +3,23 @@
 import asyncio
 import socket
 from typing import Any
+from urllib.parse import urlparse
 
 import pytest
 import redis.asyncio as aioredis
 
-from app.core.config import Settings
+from app.core.config import Settings, settings
 from app.reliability.circuit_breaker import CircuitState
 from app.storage.circuit_storage import RedisCircuitStorage
 
 
-def is_redis_available(host: str = "localhost", port: int = 6379) -> bool:
-    """Check if local Redis is running and accepting TCP connections."""
+def is_redis_available(redis_url: str | None = None) -> bool:
+    """Check if configured Redis is running and accepting TCP connections."""
+    target_url = redis_url or settings.redis_url
+    parsed = urlparse(target_url)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 6379
+
     s = socket.socket()
     s.settimeout(0.5)
     try:
@@ -26,14 +32,14 @@ def is_redis_available(host: str = "localhost", port: int = 6379) -> bool:
 
 pytestmark = pytest.mark.skipif(
     not is_redis_available(),
-    reason="Local Redis daemon is not running on localhost:6379",
+    reason=f"Redis daemon is not reachable at {settings.redis_url}",
 )
 
 
 @pytest.fixture
 async def live_redis_client() -> Any:
     """Fixture providing a connected Redis client, cleaning up test keys after use."""
-    client = aioredis.from_url("redis://localhost:6379/0", decode_responses=True)
+    client = aioredis.from_url(settings.redis_url, decode_responses=True)
     yield client
     # Clean up test keys
     async for key in client.scan_iter("llm_gateway:circuit:test_integration_*"):

@@ -324,7 +324,24 @@ When running `uv run pytest` directly from the host workstation:
 - **257 tests pass**
 - **17 tests skip**
 
-**Explanation**: In Phase 18, PostgreSQL (`5432`) and Redis (`6379`) were intentionally encapsulated inside the private `gateway-network` Docker bridge network with no exposed host ports for security isolation. The 17 live integration tests dynamically probe for host-accessible databases on `localhost:5432` / `localhost:6379` and cleanly skip when executed outside the container network. **Skipped tests are not counted as passed.**
+**Explanation**: In Phase 18, PostgreSQL (`5432`) and Redis (`6379`) were intentionally encapsulated inside the private `llm-gateway-network` Docker bridge network with no exposed host ports for security isolation. The 17 live integration tests dynamically probe for reachable databases and cleanly skip when executed outside the container network. **Skipped tests are not counted as passed.**
+
+### Running All 274 Tests in the Docker Compose Network
+To execute the complete test suite including all 17 live PostgreSQL, Redis, Alembic migration, and usage tracking integration tests against isolated test databases (`llm_gateway_test` and Redis DB 15):
+
+```bash
+docker run --rm \
+  --network llm-gateway-network \
+  -v "${PWD}:/app" \
+  -w /app \
+  -e DATABASE_URL="postgresql+asyncpg://postgres:postgres@postgres:5432/llm_gateway_test" \
+  -e REDIS_URL="redis://redis:6379/15" \
+  -e UV_PROJECT_ENVIRONMENT=/tmp/venv \
+  ghcr.io/astral-sh/uv:python3.12-bookworm-slim \
+  sh -c "uv sync --frozen --extra dev && uv run pytest -q"
+```
+
+**Results in Docker Network**: **274 passed** (0 skipped, 0 failed).
 
 ---
 
