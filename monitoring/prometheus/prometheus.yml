@@ -1,9 +1,8 @@
 # Prometheus Configuration for Self-Healing LLM Gateway
 # Scrapes the application's /metrics endpoint.
 #
-# NOTE FOR PHASE 17 DOCKER COMPOSE:
-# In the containerized stack, change the target to 'gateway:8000'.
-# For local host development, 'localhost:8000' or 'host.docker.internal:8000' is used.
+# Target 'gateway:8000' resolves across the private Docker network in Docker Compose.
+# For standalone host development, Prometheus can be overridden to 'localhost:8000'.
 
 global:
   scrape_interval: 10s
@@ -14,7 +13,7 @@ scrape_configs:
     metrics_path: "/metrics"
     static_configs:
       - targets:
-          - "localhost:8000"
+          - "gateway:8000"
         labels:
           app: "self-healing-llm-gateway"
           env: "development"

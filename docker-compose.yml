@@ -1,0 +1,173 @@
+services:
+  # 1. PostgreSQL - Durable data store (tenants, API keys, usage records)
+  postgres:
+    image: postgres:16-alpine
+    container_name: llm-gateway-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-llm_gateway}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - gateway-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-llm_gateway}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 2. Redis - Operational runtime state (circuit states, sliding-window rate limits, health counters)
+  redis:
+    image: redis:7-alpine
+    container_name: llm-gateway-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    networks:
+      - gateway-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # 3. Ollama - Local LLM inference provider backend
+  ollama:
+    image: ollama/ollama:latest
+    container_name: llm-gateway-ollama
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - gateway-network
+    healthcheck:
+      test: ["CMD-SHELL", "ollama --version || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 4. Gateway - FastAPI application with LiteLLM, circuit breakers, failover, and metrics
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: llm-gateway-api
+    restart: unless-stopped
+    environment:
+      ENVIRONMENT: production
+      LOG_LEVEL: INFO
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8000
+      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-llm_gateway}
+      LLM_PROVIDER: ollama
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
+      DEFAULT_TENANT_RPM: ${DEFAULT_TENANT_RPM:-60}
+      RATE_LIMIT_WINDOW_SECONDS: 60
+      CHAOS_ENABLED: ${CHAOS_ENABLED:-false}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-}
+      OTEL_ENABLED: ${OTEL_ENABLED:-true}
+      OTEL_SERVICE_NAME: self-healing-llm-gateway
+    networks:
+      - gateway-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 5. Nginx - Reverse proxy and single public HTTP entrypoint
+  nginx:
+    image: nginx:alpine
+    container_name: llm-gateway-nginx
+    restart: unless-stopped
+    ports:
+      - "8000:80"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - gateway-network
+    depends_on:
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # 6. Prometheus - Metrics collection and monitoring engine
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: llm-gateway-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    networks:
+      - gateway-network
+    depends_on:
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:9090/-/healthy || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # 7. Grafana - Observability visualization dashboards
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: llm-gateway-grafana
+    restart: unless-stopped
+    ports:
+      - "${GRAFANA_PORT:-3002}:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    networks:
+      - gateway-network
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+networks:
+  gateway-network:
+    name: llm-gateway-network
+    driver: bridge
+
+volumes:
+  postgres_data:
+    name: llm-gateway-postgres-data
+  redis_data:
+    name: llm-gateway-redis-data
+  ollama_data:
+    name: llm-gateway-ollama-data
+  prometheus_data:
+    name: llm-gateway-prometheus-data
+  grafana_data:
+    name: llm-gateway-grafana-data
