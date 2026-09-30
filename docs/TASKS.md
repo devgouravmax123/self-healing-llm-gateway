@@ -1538,23 +1538,23 @@ Automate basic project quality checks.
 
 
 
-\* \[ ] Create GitHub Actions workflow.
+\* \[x] Create GitHub Actions workflow.
 
-\* \[ ] Install dependencies.
+\* \[x] Install dependencies.
 
-\* \[ ] Run Ruff.
+\* \[x] Run Ruff.
 
-\* \[ ] Run mypy.
+\* \[x] Run mypy.
 
-\* \[ ] Run pytest.
+\* \[x] Run pytest.
 
 \* \[ ] Add test coverage reporting if useful.
 
-\* \[ ] Configure pre-commit.
+\* \[x] Configure pre-commit.
 
-\* \[ ] Ensure secrets are not committed.
+\* \[x] Ensure secrets are not committed.
 
-\* \[ ] Verify CI from a clean environment.
+\* \[x] Verify CI from a clean environment.
 
 
 
