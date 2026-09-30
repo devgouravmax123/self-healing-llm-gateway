@@ -1812,51 +1812,51 @@ Make the project understandable to another engineer.
 
 
 
-\* \[ ] Complete README.
+* [x] Complete README.
 
-\* \[ ] Explain architecture.
+* [x] Explain architecture.
 
-\* \[ ] Explain local setup.
+* [x] Explain local setup.
 
-\* \[ ] Explain Docker Compose.
+* [x] Explain Docker Compose.
 
-\* \[ ] Explain configuration.
+* [x] Explain configuration.
 
-\* \[ ] Explain API usage.
+* [x] Explain API usage.
 
-\* \[ ] Explain circuit breaker.
+* [x] Explain circuit breaker.
 
-\* \[ ] Explain retry/failover.
+* [x] Explain retry/failover.
 
-\* \[ ] Explain observability.
+* [x] Explain observability.
 
-\* \[ ] Explain chaos testing.
+* [x] Explain chaos testing.
 
-\* \[ ] Explain load testing.
+* [x] Explain load testing.
 
-\* \[ ] Add architecture diagram.
+* [x] Add architecture diagram.
 
-\* \[ ] Add example requests.
+* [x] Add example requests.
 
-\* \[ ] Add example responses.
+* [x] Add example responses.
 
-\* \[ ] Add example failure scenario.
+* [x] Add example failure scenario.
 
-\* \[ ] Add Grafana screenshots if useful.
+* [x] Add Grafana screenshots if useful.
 
-\* \[ ] Document actual benchmark results.
+* [x] Document actual benchmark results.
 
-\* \[ ] Document limitations.
+* [x] Document limitations.
 
-\* \[ ] Review security documentation.
+* [x] Review security documentation.
 
-\* \[ ] Review `DECISIONS.md`.
+* [x] Review `DECISIONS.md`.
 
-\* \[ ] Remove unused code/dependencies.
+* [x] Remove unused code/dependencies.
 
-\* \[ ] Run complete test suite.
+* [x] Run complete test suite.
 
-\* \[ ] Perform clean local setup from repository.
+* [x] Perform clean local setup from repository.
 
 
 
