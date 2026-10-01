@@ -141,7 +141,7 @@ docker compose exec ollama ollama pull qwen2.5:3b
 > To verify that the model is downloaded and ready for inference, run:
 > `docker compose exec ollama ollama list`
 
-### 4. Verify System Health & Readiness
+### Verify System Health & Readiness
 Check health endpoints through the public Nginx entrypoint:
 
 ```bash
@@ -157,7 +157,7 @@ Expected response for `/ready`:
 {"status":"ready","redis":"ready","database":"ready"}
 ```
 
-### 5. Generate Your Local Gateway API Key
+### Generate Your Local Gateway API Key
 All `/v1/` endpoints require a SHA-256 hashed API key stored in PostgreSQL. Generate a fresh, cryptographically secure local key:
 
 ```bash
@@ -181,7 +181,7 @@ Keep this key private. It is stored hashed and printed once.
 > - The plaintext key is printed only once upon generation and never stored in the database.
 > - Do not commit or share this key.
 
-### 6. Send Your First LLM Request
+### Send Your First LLM Request
 Use the generated key in the `Authorization: Bearer` header:
 
 ```bash
@@ -199,19 +199,283 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 
 ---
 
+---
+
 ## 4. Local Deployment Modes
 
-The repository provides three distinct execution modes:
+The gateway supports three containerized deployment modes designed for local development, physical failover demonstration, and automated chaos testing.
 
-| Mode | Command | Description |
-| :--- | :--- | :--- |
-| **A. Default Local Stack** | `docker compose up -d` | Normal gateway operation with a single Ollama instance, PostgreSQL, Redis, Nginx, Prometheus, and Grafana. |
-| **B. Physical Failover Demo** | `docker compose -f docker-compose.yml -f docker-compose.demo.yml up -d` | Spawns two independent, physically isolated Ollama containers (`ollama-primary` and `ollama-secondary`) on the Docker network for genuine process-level failover. See [`docs/PHYSICAL_FAILOVER_DEMO.md`](docs/PHYSICAL_FAILOVER_DEMO.md). |
-| **C. Chaos E2E Demo** | `docker compose -f docker-compose.yml -f docker-compose.chaos-demo.yml up -d` | Enables the `/admin/chaos` fault injection engine for deterministic E2E reliability and circuit recovery testing. See [`docs/E2E_DEMO.md`](docs/E2E_DEMO.md). |
+### A. Default Local Stack
+```bash
+docker compose up -d
+```
+Normal local gateway operation using the standard 7-service stack:
+- **FastAPI Gateway** (reverse-proxied behind Nginx on port `8000`)
+- **Redis** (distributed token-bucket rate limiting and circuit state persistence)
+- **PostgreSQL** (tenant metadata, hashed API key authentication, and token usage ledgers)
+- **Ollama** (local inference backend serving `qwen2.5:3b`)
+- **Prometheus** (metrics scraping on port `9090`)
+- **Grafana** (pre-provisioned observability dashboards on port `3002`)
+- **Nginx** (reverse proxy and ingress router)
+
+### B. Physical Failover Demo
+```bash
+docker compose -f docker-compose.yml -f docker-compose.demo.yml up -d
+```
+Deploys two isolated Ollama containers (`ollama-primary` and `ollama-secondary`) on the Docker network to demonstrate real process/container termination, bounded retries, circuit breaker tripping, and automatic upstream failover. See [`docs/PHYSICAL_FAILOVER_DEMO.md`](docs/PHYSICAL_FAILOVER_DEMO.md).
+
+### C. Chaos E2E Demo
+```bash
+docker compose -f docker-compose.yml -f docker-compose.chaos-demo.yml up -d
+```
+Enables the development-only deterministic chaos injection environment used for end-to-end reliability verification and circuit-recovery testing. See [`docs/E2E_DEMO.md`](docs/E2E_DEMO.md).
 
 ---
 
-## 5. Observability & Monitoring
+## 5. 🎬 Self-Healing Physical Failover Demo
+
+This demonstration proves genuine process-level fault tolerance and recovery using two physically isolated Ollama inference containers (`ollama-primary` and `ollama-secondary`) on the Docker network.
+
+```text
+Healthy System
+      ↓
+Normal Request
+      ↓
+Primary Provider Failure
+      ↓
+Bounded Retries
+      ↓
+Circuit Opens
+      ↓
+Automatic Failover
+      ↓
+Secondary Provider Serves Request
+      ↓
+Primary Provider Restored
+      ↓
+Recovery Probe
+      ↓
+Circuit Returns to CLOSED
+```
+
+### What Makes This a Physical Failover Demo
+- **Real Network Socket Drops**: Unlike simulated dashboard mocks, the primary provider container (`llm-gateway-ollama-primary`) is physically stopped using Docker (`docker stop`).
+- **Independent Inference Engines**: Both `ollama-primary` and `ollama-secondary` run independent Ollama instances with dedicated storage volumes (`ollama_primary_data` and `ollama_secondary_data`), hosting the `qwen2.5:3b` model.
+- **Continuous Gateway Availability**: The gateway, Nginx reverse proxy, PostgreSQL, Redis, Prometheus, and Grafana remain fully operational throughout the outage.
+- **Architectural Details**: For full architecture diagrams and component relationships, see [`docs/PHYSICAL_FAILOVER_DEMO.md`](docs/PHYSICAL_FAILOVER_DEMO.md) and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+---
+
+### Step-by-Step Demonstration Walkthrough
+
+#### Step 1 — Start the Physical Failover Stack
+Start the gateway with the multi-container physical failover overlay:
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.demo.yml up -d
+```
+This deploys the 7 standard services plus independent `llm-gateway-ollama-primary` (priority 1) and `llm-gateway-ollama-secondary` (priority 2) containers.
+
+#### Step 2 — Prepare the Model on Both Providers
+Download and verify `qwen2.5:3b` in both Ollama instances:
+```powershell
+docker exec llm-gateway-ollama-primary ollama pull qwen2.5:3b
+docker exec llm-gateway-ollama-secondary ollama pull qwen2.5:3b
+```
+Verify readiness:
+```powershell
+docker exec llm-gateway-ollama-primary ollama list
+docker exec llm-gateway-ollama-secondary ollama list
+```
+
+#### Step 3 — Generate a Local Demo API Key
+Bootstrap a fresh local demo API key:
+```powershell
+docker compose exec gateway python scripts/bootstrap_local_demo.py
+```
+This registers the local `demo_tenant`, stores only the SHA-256 hash in PostgreSQL, and prints your plaintext key once to stdout.
+
+#### Step 4 — Send a Normal Baseline Request
+Send an OpenAI-compatible completion request while both providers are healthy:
+```powershell
+curl -X POST http://localhost:8000/v1/chat/completions `
+  -H "Authorization: Bearer <PASTE_YOUR_KEY>" `
+  -H "Content-Type: application/json" `
+  -d '{
+    "model": "qwen2.5:3b",
+    "messages": [{"role": "user", "content": "Ping"}]
+  }'
+```
+- **Observed State**: Request routes to `ollama_primary` (priority 1).
+- **Circuit Breaker**: `ollama_primary` = CLOSED, `ollama_secondary` = CLOSED.
+- **Outcome**: Returns `HTTP 200 OK`.
+
+#### Step 5 — Physically Stop the Primary Provider
+Simulate a total crash of the primary provider:
+```powershell
+docker stop llm-gateway-ollama-primary
+```
+Verify that `llm-gateway-ollama-primary` is terminated while the gateway and `llm-gateway-ollama-secondary` remain running.
+
+#### Step 6 — Send the Same Client Request
+Send the exact same request again without modifying client configuration:
+```powershell
+curl -X POST http://localhost:8000/v1/chat/completions `
+  -H "Authorization: Bearer <PASTE_YOUR_KEY>" `
+  -H "Content-Type: application/json" `
+  -d '{
+    "model": "qwen2.5:3b",
+    "messages": [{"role": "user", "content": "Ping"}]
+  }'
+```
+- **Observed Outcome**: Client receives transparent `HTTP 200 OK` with valid completion text.
+
+#### Step 7 — Retry and Automatic Failover Behavior
+During Step 6, the gateway automatically executes:
+```text
+Primary failure (connection refused / socket timeout)
+      ↓
+Bounded retries on primary (exponential backoff + jitter)
+      ↓
+Retry exhaustion (MAX_RETRIES reached)
+      ↓
+Failover engine activates: ollama_primary → ollama_secondary (reason=retry_exhausted)
+      ↓
+Secondary provider executes request successfully
+```
+
+#### Step 8 — Circuit Breaker Protects Failing Provider
+Because consecutive failures on `ollama_primary` reached `CIRCUIT_FAILURE_THRESHOLD`:
+- **`ollama_primary` Circuit**: Transitions to **OPEN**.
+- **`ollama_secondary` Circuit**: Remains **CLOSED**.
+- **Protection**: Subsequent requests instantly bypass the dead primary socket without wasting timeout latency, routing directly to `ollama_secondary`.
+
+#### Step 9 — Observe Operational Evidence in Grafana
+Open Grafana at **[http://localhost:3002](http://localhost:3002)** (`admin` / `admin`) to observe live telemetry:
+- **Circuit State Panel**: Shows `ollama_primary` state gauge set to OPEN (`1.0`).
+- **Failovers Metric**: `gateway_failovers_total{from_provider="ollama_primary", to_provider="ollama_secondary"}` incremented.
+- **Provider Request Counts**: Shows requests shifting from primary to secondary.
+- **Latency & Error Breakdown**: Records connection error categories and per-attempt timing.
+
+#### Step 10 — Restore the Primary Provider
+Restart the primary Ollama container:
+```powershell
+docker start llm-gateway-ollama-primary
+```
+Wait a few seconds for container health check to report healthy (`docker ps` shows `healthy`).
+
+#### Step 11 — Self-Healing Recovery Probe
+After `CIRCUIT_COOLDOWN_SECONDS` elapses, send another request:
+```powershell
+curl -X POST http://localhost:8000/v1/chat/completions `
+  -H "Authorization: Bearer <PASTE_YOUR_KEY>" `
+  -H "Content-Type: application/json" `
+  -d '{
+    "model": "qwen2.5:3b",
+    "messages": [{"role": "user", "content": "Ping"}]
+  }'
+```
+- **Recovery Lifecycle**: The circuit enters `HALF_OPEN` state, permitting a single probe request through an atomic concurrency lock.
+- **Probe Success**: When the probe succeeds against restored `ollama_primary`, `circuit_breaker_manager.record_success()` resets failure counters and restores the circuit to **CLOSED**.
+
+> [!NOTE]
+> The `HALF_OPEN` recovery probe is intentionally transient and may occur between Prometheus scrape intervals. Grafana metrics will reflect the restored **CLOSED** state. Application logs provide granular evidence of the recovery probe.
+
+#### Step 12 — Final Verified State
+- **`ollama_primary` Circuit**: **CLOSED** (accepting normal primary traffic).
+- **`ollama_secondary` Circuit**: **CLOSED** (healthy standby).
+- **Routing**: Priority-1 traffic automatically returns to the primary provider.
+
+---
+
+### What This Demo Proves
+- **Local Reproducibility**: Real multi-process provider failures can be reproduced entirely on a local workstation with zero cloud dependencies.
+- **Failure Detection & Containment**: Socket drops and timeouts are caught and classified within bounded execution budgets.
+- **Provider Shielding**: Circuit breakers trip to OPEN, preventing dead providers from amplifying system latency.
+- **Zero Client Modification**: Clients communicate with a single OpenAI-compatible endpoint; failover and retries happen transparently.
+- **Automated Recovery**: After the failed provider is restored, the gateway automatically performs the recovery probe and returns the provider circuit to CLOSED without requiring a gateway restart or manual routing change.
+- **Full Observability**: Every transition, attempt, retry, and failover is measurable in Prometheus and Grafana.
+
+---
+
+### Run the Complete Automated Script
+You can also run the entire 12-step sequence automatically with live step verification and Prometheus metric assertions:
+
+```powershell
+# 1. Start the stack and pull models
+docker compose -f docker-compose.yml -f docker-compose.demo.yml up -d
+docker exec llm-gateway-ollama-primary ollama pull qwen2.5:3b
+docker exec llm-gateway-ollama-secondary ollama pull qwen2.5:3b
+
+# 2. Bootstrap API key
+docker compose exec gateway python scripts/bootstrap_local_demo.py
+
+# 3. Run automated physical failover script
+python scripts/demo_physical_failover.py --api-key <PASTE_YOUR_API_KEY>
+```
+
+---
+
+### Demo Evidence — Step-by-Step Screenshots
+
+#### 01 — Baseline Normal Request (Healthy Primary Provider)
+![Baseline Normal Request](docs/images/demo/01_baseline_normal_request.png)
+*A client completion request sent to `http://localhost:8000/v1/chat/completions` using the bootstrapped demo API key returns `HTTP 200 OK` from `qwen2.5:3b` via the healthy primary provider.*
+
+#### 02 — Healthy Baseline State in Grafana (Traffic & Latency)
+![Healthy Baseline State - Traffic & Latency](docs/images/demo/02_grafana_healthy_baseline_top.png)
+*Grafana overview displaying initial throughput with `HTTP 200` responses and upstream execution latency metrics while both `ollama_primary` and `ollama_secondary` circuit breakers are in the `[closed]` Active state.*
+
+#### 03 — Healthy Baseline State in Grafana (Reliability & Token Counts)
+![Healthy Baseline State - Reliability & Tokens](docs/images/demo/03_grafana_healthy_baseline_bottom.png)
+*Grafana reliability panels showing 0 retries, 0 failovers, and delivered input/output tokens during initial baseline operation with healthy providers.*
+
+#### 04 — Failover Execution & Primary Circuit Tripped to OPEN (Traffic & Circuits)
+![Failover Circuit OPEN - Traffic & Circuits](docs/images/demo/04_grafana_failover_circuit_open_top.png)
+*Following the physical shutdown of `llm-gateway-ollama-primary`, client requests continue succeeding (`HTTP 200`). Grafana shows `ollama_primary [open]` after connection errors, while `ollama_secondary [closed]` actively takes over upstream traffic.*
+
+#### 05 — Failover Transitions & Secondary Token Delivery in Grafana
+![Failover Transitions & Tokens](docs/images/demo/05_grafana_failover_circuit_open_bottom.png)
+*Grafana reliability and token panels registering retry activity, the failover transition metric (`ollama_primary → ollama_secondary (retry_exhausted)`), and token delivery continuing through the secondary provider.*
+
+#### 06 — Transparent Client Response During Primary Outage
+![Transparent Failover Response](docs/images/demo/06_transparent_failover_response.png)
+*Client sends the exact same completion request while `llm-gateway-ollama-primary` is down. The gateway handles the failure internally, returning `HTTP 200 OK` with model response seamlessly.*
+
+#### 07 — Restoring Primary Provider Container
+![Docker Start Primary Container](docs/images/demo/07_docker_start_primary_recovery.png)
+*Restarting `llm-gateway-ollama-primary` via `docker start`. The container status progresses through `health: starting` before returning to healthy status alongside all running services.*
+
+#### 08 — Recovery Request Execution
+![Recovery Request Response](docs/images/demo/08_recovery_probe_response.png)
+*Subsequent client request sent after primary restoration executes successfully (`HTTP 200 OK`), initiating probe recovery on the primary inference provider.*
+
+#### 09 — Restored System & Closed Circuit Breakers in Grafana
+![Restored Circuits Closed](docs/images/demo/09_grafana_recovered_circuit_closed_top.png)
+*Grafana traffic and circuit breaker state panel showing both `ollama_primary [closed]` and `ollama_secondary [closed]` back in the Active state following successful recovery.*
+
+#### 10 — Post-Recovery Metrics & Token Delivery in Grafana
+![Post-Recovery Metrics](docs/images/demo/10_grafana_recovered_metrics_bottom.png)
+*Grafana reliability and token panels illustrating the stabilized system: failover rates return to 0, primary provider traffic resumes, and total delivered tokens reach 164 input / 24 output.*
+
+#### 11 — Verified Primary Execution Following Full Recovery
+![Post-Recovery Execution](docs/images/demo/11_post_recovery_request_success.png)
+*Client completion request confirms stable primary routing following system recovery, returning `HTTP 200 OK` with model content `"Primary provider is working."`.*
+
+#### 12 — Steady-State Operational Telemetry in Grafana (Top Panels)
+![Steady-State Top Panels](docs/images/demo/12_grafana_steady_state_traffic_top.png)
+*Grafana top view displaying steady-state traffic metrics, normalized upstream execution latency across models, and active CLOSED circuit breaker status.*
+
+#### 13 — Steady-State Reliability & Token Accounting in Grafana (Bottom Panels)
+![Steady-State Bottom Panels](docs/images/demo/13_grafana_steady_state_overview_bottom.png)
+*Grafana lower view showing 0 error dispatch rates, zero active failovers during steady-state operation, and consistent cumulative token metrics.*
+
+#### 14 — Physical Container Termination via Docker CLI
+![Docker Stop Primary Command](docs/images/demo/14_docker_stop_primary_failover_trigger.png)
+*PowerShell console showing the physical execution of `docker stop llm-gateway-ollama-primary` and `docker compose ps` verifying that `llm-gateway-ollama-primary` was taken offline while the gateway and secondary instances remained running.*
+
+---
+
+## 6. Observability & Monitoring
 
 The gateway exports comprehensive metrics, structured logs, and distributed traces.
 
