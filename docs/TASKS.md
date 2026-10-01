@@ -2388,69 +2388,69 @@ The project is complete when:
 
 
 
-\* \[ ] Core API works.
+\* \[x] Core API works.
 
-\* \[ ] Multiple provider/model targets work.
+\* \[x] Multiple provider/model targets work.
 
-\* \[ ] Provider failures are detected.
+\* \[x] Provider failures are detected.
 
-\* \[ ] Errors are classified.
+\* \[x] Errors are classified.
 
-\* \[ ] Retries are bounded.
+\* \[x] Retries are bounded.
 
-\* \[ ] Timeouts are enforced.
+\* \[x] Timeouts are enforced.
 
-\* \[ ] Circuit breaker works.
+\* \[x] Circuit breaker works.
 
-\* \[ ] HALF\_OPEN recovery works.
+\* \[x] HALF\_OPEN recovery works.
 
-\* \[ ] Failover works.
+\* \[x] Failover works.
 
-\* \[ ] Redis stores shared operational state.
+\* \[x] Redis stores shared operational state.
 
-\* \[ ] PostgreSQL stores durable records.
+\* \[x] PostgreSQL stores durable records.
 
-\* \[ ] Health metrics are measurable.
+\* \[x] Health metrics are measurable.
 
-\* \[ ] Token usage is tracked when available.
+\* \[x] Token usage is tracked when available.
 
-\* \[ ] Cost tracking is explicit.
+\* \[x] Cost tracking is explicit.
 
-\* \[ ] Authentication works.
+\* \[x] Authentication works.
 
-\* \[ ] Rate limiting works.
+\* \[x] Rate limiting works.
 
-\* \[ ] Structured logging works.
+\* \[x] Structured logging works.
 
-\* \[ ] Prometheus metrics work.
+\* \[x] Prometheus metrics work.
 
-\* \[ ] Grafana dashboards work.
+\* \[x] Grafana dashboards work.
 
-\* \[ ] OpenTelemetry tracing works.
+\* \[x] OpenTelemetry tracing works.
 
-\* \[ ] Chaos testing works safely.
+\* \[x] Chaos testing works safely.
 
-\* \[ ] Unit tests pass.
+\* \[x] Unit tests pass.
 
-\* \[ ] Integration tests pass.
+\* \[x] Integration tests pass.
 
-\* \[ ] Failure tests pass.
+\* \[x] Failure tests pass.
 
-\* \[ ] Load tests have been executed.
+\* \[x] Load tests have been executed.
 
-\* \[ ] Docker Compose works.
+\* \[x] Docker Compose works.
 
-\* \[ ] Nginx works.
+\* \[x] Nginx works.
 
-\* \[ ] CI works.
+\* \[x] CI works.
 
-\* \[ ] Documentation is complete.
+\* \[x] Documentation is complete.
 
-\* \[ ] No secrets are committed.
+\* \[x] No secrets are committed.
 
-\* \[ ] No unsupported performance claims exist.
+\* \[x] No unsupported performance claims exist.
 
-\* \[ ] The core project runs locally without mandatory paid services.
+\* \[x] The core project runs locally without mandatory paid services.
 
 
 

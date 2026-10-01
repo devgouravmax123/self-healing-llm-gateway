@@ -2365,3 +2365,28 @@ Key deliverables implemented:
   - `ruff format`: 101 files formatted
   - `mypy`: Success, no issues found in 95 source files
   - `git diff --check`: Clean
+
+---
+
+# 43. Post-Phase 21 — Redis Connection-State Resilience Checkpoint
+
+- **Commit**: `d1e21b4`
+- **Problem**: During a Redis outage, operational failures previously left `RedisManager._is_connected=True`, causing subsequent concurrent operations to repeatedly wait for the ~2.0s Redis socket timeout before falling back to in-memory state.
+- **Fix**: `RedisManager` now immediately calls `mark_disconnected()` upon operational Redis errors (transitioning to degraded mode) and uses a throttled, serialized recovery probe (`probe_recovery()` guarded by `asyncio.Lock` and `redis_reconnect_interval_seconds=5.0`).
+- **Degraded behavior**:
+  - Circuit state → in-memory fallback (`InMemoryCircuitStorage`)
+  - Health tracking → in-memory fallback (`InMemoryHealthStorage`)
+  - Rate limiting → fail-open (logs warning without failing inference)
+  - Authentication → PostgreSQL fallback / read-through cache
+- **Runtime verification**:
+  - Redis stopped during live execution.
+  - Authenticated requests continued successfully without interruption.
+  - No repeated Redis timeout storm occurred after disconnect detection (requests bypass Redis during the cooldown interval).
+  - Redis container restarted.
+  - Recovery probe succeeded automatically without gateway restart or manual `/ready` calls.
+  - Redis-backed operation resumed normally.
+- **Final test result**:
+  - `pytest`: 294 passed, 18 skipped, 1 warning
+  - `ruff check`: All checks passed
+  - `ruff format --check`: Clean
+  - `mypy`: Success, no issues found in 95 source files
