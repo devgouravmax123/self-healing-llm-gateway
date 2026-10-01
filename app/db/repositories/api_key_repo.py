@@ -70,17 +70,17 @@ class ApiKeyRepository:
             await session.refresh(api_key, ["tenant"])
             return api_key
 
-    async def revoke_api_key(self, api_key_id: UUID) -> bool:
-        """Revoke an API key by ID."""
+    async def revoke_api_key(self, api_key_id: UUID) -> str | None:
+        """Revoke an API key by ID and return its hashed_key if found."""
         async with self.db_mgr.session() as session:
             stmt = select(ApiKey).where(ApiKey.id == api_key_id)
             res = await session.execute(stmt)
             key = res.scalar_one_or_none()
             if key is None:
-                return False
+                return None
             key.status = "revoked"
             key.revoked_at = utc_now()
-            return True
+            return key.hashed_key
 
 
 # Global API key repository singleton
