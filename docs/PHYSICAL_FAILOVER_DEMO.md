@@ -49,20 +49,30 @@ Demo settings applied via `docker-compose.demo.yml`:
 
 ## Running the Demonstration
 
-1. **Start the stack**:
+1. **Start the physical multi-container stack**:
    ```bash
    docker compose -f docker-compose.yml -f docker-compose.demo.yml up -d
    ```
+   This creates two physically isolated Ollama containers: `llm-gateway-ollama-primary` and `llm-gateway-ollama-secondary`.
 
-2. **Pull the model into both Ollama containers**:
+2. **Pull the model into BOTH Ollama containers**:
    ```bash
    docker exec llm-gateway-ollama-primary ollama pull qwen2.5:3b
    docker exec llm-gateway-ollama-secondary ollama pull qwen2.5:3b
    ```
+   > [!TIP]
+   > Verify model availability in both containers:
+   > - `docker exec llm-gateway-ollama-primary ollama list`
+   > - `docker exec llm-gateway-ollama-secondary ollama list`
 
-3. **Execute the automated demonstration script**:
+3. **Generate your local API key** (if not already created):
    ```bash
-   uv run python scripts/demo_physical_failover.py --api-key <YOUR_TENANT_KEY>
+   docker compose exec gateway python scripts/bootstrap_local_demo.py
+   ```
+
+4. **Execute the automated demonstration script**:
+   ```bash
+   python scripts/demo_physical_failover.py --api-key <PASTE_YOUR_API_KEY>
    ```
 
 ---

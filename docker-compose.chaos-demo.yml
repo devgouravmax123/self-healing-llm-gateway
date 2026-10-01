@@ -1,0 +1,5 @@
+services:
+  gateway:
+    environment:
+      ENVIRONMENT: development
+      CHAOS_ENABLED: "true"

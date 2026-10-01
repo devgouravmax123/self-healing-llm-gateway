@@ -39,6 +39,7 @@ RUN groupadd -r appgroup && useradd -r -g appgroup -d /app -s /sbin/nologin appu
 COPY --from=builder --chown=appuser:appgroup /app/.venv /app/.venv
 COPY --chown=appuser:appgroup app/ /app/app/
 COPY --chown=appuser:appgroup alembic/ /app/alembic/
+COPY --chown=appuser:appgroup scripts/ /app/scripts/
 COPY --chown=appuser:appgroup alembic.ini pyproject.toml /app/
 
 # Switch to non-root user

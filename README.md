@@ -118,27 +118,30 @@ Every client interaction follows a deterministic 13-step lifecycle:
 
 The entire gateway stack runs locally with zero external API dependencies or paid cloud accounts.
 
-### Prerequisites
-- Docker Engine 24+ and Docker Compose v2+
-- Local copy of configuration environment file:
-
+### 1. Clone and Configure
 ```bash
+git clone https://github.com/<owner>/self-healing-llm-gateway.git
+cd self-healing-llm-gateway
 cp .env.example .env
 ```
 
-### 1. Start the 7-Service Stack
+### 2. Start the 7-Service Stack
 ```bash
 docker compose up -d
 ```
 
-### 2. Pull the Configured Local Model
+### 3. Pull the Configured Local Model
 The default model configured across the stack is **`qwen2.5:3b`**. Download it into the running Ollama container:
 
 ```bash
 docker compose exec ollama ollama pull qwen2.5:3b
 ```
 
-### 3. Verify System Health & Readiness
+> [!TIP]
+> To verify that the model is downloaded and ready for inference, run:
+> `docker compose exec ollama ollama list`
+
+### 4. Verify System Health & Readiness
 Check health endpoints through the public Nginx entrypoint:
 
 ```bash
@@ -154,110 +157,68 @@ Expected response for `/ready`:
 {"status":"ready","redis":"ready","database":"ready"}
 ```
 
----
+### 5. Generate Your Local Gateway API Key
+All `/v1/` endpoints require a SHA-256 hashed API key stored in PostgreSQL. Generate a fresh, cryptographically secure local key:
 
-## 4. API Usage & Authentication
+```bash
+docker compose exec gateway python scripts/bootstrap_local_demo.py
+```
 
-All API endpoints under `/v1/` require an API key passed in the standard `Authorization` header.
+This bootstraps the local `demo_tenant` entity, stores only the SHA-256 hash in PostgreSQL, and prints your plaintext key once to stdout:
+```text
+============================================================
+Self-Healing LLM Gateway — Local Demo API Key Generated
+============================================================
+Tenant ID : demo_tenant
+API Key   : gw_live_...
+------------------------------------------------------------
+Keep this key private. It is stored hashed and printed once.
+============================================================
+```
 
-### Authenticated Chat Completion Example
+> [!IMPORTANT]
+> - No universal or hardcoded keys are seeded.
+> - The plaintext key is printed only once upon generation and never stored in the database.
+> - Do not commit or share this key.
+
+### 6. Send Your First LLM Request
+Use the generated key in the `Authorization: Bearer` header:
 
 ```bash
 curl -X POST http://localhost:8000/v1/chat/completions \
-  -H "Authorization: Bearer $API_KEY" \
+  -H "Authorization: Bearer <PASTE_YOUR_API_KEY_HERE>" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "qwen2.5:3b",
     "messages": [
-      {"role": "system", "content": "You are a helpful coding assistant."},
-      {"role": "user", "content": "Write a Python function to check for prime numbers."}
+      {"role": "user", "content": "Explain quantum computing in one sentence."}
     ],
     "temperature": 0.7
   }'
 ```
 
-### OpenAI-Compatible Response Format
-```json
-{
-  "id": "chatcmpl-914b1e5f-1405-4f40-a192-34850989f5bc",
-  "object": "chat.completion",
-  "created": 1727701200,
-  "model": "qwen2.5:3b",
-  "choices": [
-    {
-      "index": 0,
-      "message": {
-        "role": "assistant",
-        "content": "def is_prime(n):\n    if n < 2:\n        return False\n    for i in range(2, int(n**0.5) + 1):\n        if n % i == 0:\n            return False\n    return True"
-      },
-      "finish_reason": "stop"
-    }
-  ],
-  "usage": {
-    "prompt_tokens": 28,
-    "completion_tokens": 54,
-    "total_tokens": 82
-  }
-}
-```
+---
+
+## 4. Local Deployment Modes
+
+The repository provides three distinct execution modes:
+
+| Mode | Command | Description |
+| :--- | :--- | :--- |
+| **A. Default Local Stack** | `docker compose up -d` | Normal gateway operation with a single Ollama instance, PostgreSQL, Redis, Nginx, Prometheus, and Grafana. |
+| **B. Physical Failover Demo** | `docker compose -f docker-compose.yml -f docker-compose.demo.yml up -d` | Spawns two independent, physically isolated Ollama containers (`ollama-primary` and `ollama-secondary`) on the Docker network for genuine process-level failover. See [`docs/PHYSICAL_FAILOVER_DEMO.md`](docs/PHYSICAL_FAILOVER_DEMO.md). |
+| **C. Chaos E2E Demo** | `docker compose -f docker-compose.yml -f docker-compose.chaos-demo.yml up -d` | Enables the `/admin/chaos` fault injection engine for deterministic E2E reliability and circuit recovery testing. See [`docs/E2E_DEMO.md`](docs/E2E_DEMO.md). |
 
 ---
 
-## 5. Self-Healing & Reliability Engine
-
-### 1. Bounded Retry with Exponential Backoff + Jitter
-When a transient provider error (`TIMEOUT`, `CONNECTION_ERROR`, `RATE_LIMITED`, `SERVER_ERROR`) occurs, the gateway retries the request up to `MAX_RETRIES` (default: `2`). Backoff delays are calculated using decorrelated full jitter:
-
-$$\text{Delay} = \min(\text{RETRY\_MAX\_DELAY},\, \text{random}(0,\, \text{RETRY\_BASE\_DELAY} \times 2^{\text{attempt}}))$$
-
-Non-retryable client errors (`AUTH_ERROR`, `BAD_REQUEST`) fail immediately without retrying.
-
-### 2. Three-State Circuit Breaker
-Every `ProviderTarget` is protected by an independent circuit breaker state machine:
-
-```text
-       ┌─────────── Consecutive Failures >= Threshold ────────────┐
-       │                                                          ▼
-  ┌──────────┐                                              ┌──────────┐
-  │  CLOSED  │◄──────────── Probe Request Succeeded ────────│   OPEN   │
-  └──────────┘                                              └──────────┘
-       ▲                                                          │
-       │                                                   Cooldown Elapsed
-       │                                                          │
-       │                 ┌─────────────┐                          ▼
-       └─────────────────┤  HALF_OPEN  │◄─────────────────────────┘
-                         └─────────────┘
-                                │
-                     Probe Request Failed
-                                │
-                                ▼
-                         (Returns to OPEN)
-```
-
-- **`CLOSED`**: Normal operation. All requests flow through to the provider. Consecutive failures are tracked.
-- **`OPEN`**: Threshold reached (`CIRCUIT_FAILURE_THRESHOLD=5`). Requests immediately fail-fast or failover to another candidate without hitting the failing provider.
-- **`HALF_OPEN`**: Cooldown window (`CIRCUIT_COOLDOWN_SECONDS=30.0`) has elapsed. Concurrency locks allow exactly **1 probe request** (`CIRCUIT_HALF_OPEN_MAX_PROBES=1`) to test provider recovery. If the probe succeeds, the circuit transitions back to `CLOSED`; if it fails, the circuit returns to `OPEN` for another cooldown cycle.
-
-### 3. Cross-Target Failover
-If retries are exhausted on the active target or its circuit is `OPEN`, the gateway automatically shifts to the next eligible `ProviderTarget` configured for that model.
-
-> [!NOTE]
-> **Architectural Notice on Failover Demonstration:**
-> The live demonstration in local Docker Compose runs two logical `ProviderTarget` entries (`ollama_primary`, `ollama_secondary`) backed by the single local Ollama service. This demonstrates **gateway-level target failover and circuit recovery logic**, not physical hardware or cloud infrastructure redundancy.
-
----
-
-## 6. Observability & Monitoring
+## 5. Observability & Monitoring
 
 The gateway exports comprehensive metrics, structured logs, and distributed traces.
 
 ### Prometheus Metrics
 Prometheus scrapes internal gateway metrics from `http://gateway:8000/metrics`. Major metric families include:
-
 - `gateway_requests_total` — Total incoming HTTP requests by path, method, and status.
-- `gateway_request_duration_seconds` — Histogram of total client request duration.
 - `gateway_provider_requests_total` — Physical provider attempts labeled by `provider_id` and `model`.
-- `gateway_provider_duration_seconds` — Latency distribution per provider attempt.
 - `gateway_provider_errors_total` — Provider failure counts labeled by `error_category`.
 - `gateway_retries_total` — Count of executed retry attempts.
 - `gateway_failovers_total` — Count of cross-target failovers executed.
@@ -266,7 +227,7 @@ Prometheus scrapes internal gateway metrics from `http://gateway:8000/metrics`. 
 - `gateway_tokens_total` & `gateway_estimated_cost_usd_total` — Token usage and cost tracking.
 
 ### Grafana Dashboards
-- **Grafana URL**: [http://localhost:3000](http://localhost:3000) (or port `3002` if configured)
+- **Grafana URL**: [http://localhost:3002](http://localhost:3002)
 - **Default Credentials**: `admin` / `admin`
 - **Provisioned Dashboard**: *Self-Healing LLM Gateway Overview* (live visualization of request throughput, error classification breakdown, circuit state indicators, and p95/p99 latency trends).
 

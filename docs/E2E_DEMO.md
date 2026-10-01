@@ -13,7 +13,7 @@ This document describes the End-to-End (E2E) reliability demonstration for the *
 
 ## 2. Canonical E2E Scenarios
 
-The test suite in [`tests/test_e2e_reliability.py`](file:///c:/Users/Raja/OneDrive/Desktop/llm-gateway/tests/test_e2e_reliability.py) and the demonstration script in [`scripts/demo_e2e_reliability.py`](file:///c:/Users/Raja/OneDrive/Desktop/llm-gateway/scripts/demo_e2e_reliability.py) implement and verify five canonical reliability scenarios:
+The test suite in [`tests/test_e2e_reliability.py`](../tests/test_e2e_reliability.py) and the demonstration script in [`scripts/demo_e2e_reliability.py`](../scripts/demo_e2e_reliability.py) implement and verify five canonical reliability scenarios:
 
 ### Scenario A — Healthy Request Execution
 - **Flow**: Client (`POST /v1/chat/completions`) -> Nginx -> Gateway (Authentication -> Rate Limiter -> Router -> Circuit Breaker CLOSED -> LiteLLM Execution -> Usage Persistence in PostgreSQL -> Prometheus Metrics -> Structured Logs -> OpenTelemetry Trace).
@@ -63,10 +63,22 @@ uv run pytest tests/test_e2e_reliability.py -v
 ```
 
 ### 3.2 Run Live Demonstration Script
-```powershell
-# Prerequisites: docker compose up -d
-python scripts/demo_e2e_reliability.py --url http://localhost:8000
-```
+The live E2E demonstration exercises the `/admin/chaos` endpoint to deterministically inject transient errors and verify self-healing recovery.
+
+1. **Start the chaos-enabled stack**:
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.chaos-demo.yml up -d
+   ```
+
+2. **Generate your local API key** (if not already created):
+   ```bash
+   docker compose exec gateway python scripts/bootstrap_local_demo.py
+   ```
+
+3. **Execute the demonstration script**:
+   ```bash
+   python scripts/demo_e2e_reliability.py --url http://localhost:8000 --tenant-key <PASTE_YOUR_API_KEY>
+   ```
 
 ---
 
