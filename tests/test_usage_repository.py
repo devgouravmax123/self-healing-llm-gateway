@@ -187,6 +187,44 @@ class TestUsageRepository:
         assert existing_req.latency_ms == 250.0
 
     @pytest.mark.asyncio
+    async def test_fallback_started_at_derived_from_completed_at_and_latency_ms(self) -> None:
+        """Verify started_at is derived from completed_at - latency_ms when omitted."""
+        from datetime import timedelta
+
+        mock_session = AsyncMock()
+        mock_session.add = MagicMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        mock_session.execute.return_value = mock_result
+
+        mock_db_mgr = MagicMock(spec=DatabaseManager)
+        mock_db_mgr.session.return_value.__aenter__.return_value = mock_session
+
+        repo = UsageRepository(db_mgr=mock_db_mgr)
+        t_completed = datetime(2026, 10, 1, 12, 0, 10, tzinfo=UTC)
+        record = await repo.create_usage_record(
+            request_id="req_derived_timing",
+            provider="openai",
+            model="gpt-4o",
+            tenant_id="tenant_abc",
+            feature="chat",
+            latency_ms=2000.0,
+            completed_at=t_completed,
+        )
+
+        assert record is not None
+        added_objs = [call[0][0] for call in mock_session.add.call_args_list]
+        req_records = [obj for obj in added_objs if isinstance(obj, RequestRecord)]
+        assert len(req_records) == 1
+        expected_started_at = t_completed - timedelta(milliseconds=2000.0)
+        assert req_records[0].started_at == expected_started_at
+        assert req_records[0].completed_at == t_completed
+        assert req_records[0].started_at is not None
+        assert req_records[0].completed_at is not None
+        assert req_records[0].completed_at >= req_records[0].started_at
+        assert req_records[0].latency_ms == 2000.0
+
+    @pytest.mark.asyncio
     async def test_database_exception_returns_none_without_raising(self) -> None:
         """Verify database errors are caught, logged, and return None gracefully."""
         mock_db_mgr = MagicMock(spec=DatabaseManager)

@@ -62,7 +62,7 @@ class RequestRecord(Base):
         String(32),
         nullable=False,
     )
-    started_at: Mapped[datetime] = mapped_column(
+    started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         default=utc_now,
         nullable=False,

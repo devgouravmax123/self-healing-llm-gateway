@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -45,6 +45,14 @@ class UsageRepository:
         without raising to caller (guaranteeing LLM inference remains uninterrupted).
         """
         try:
+            effective_completed_at = completed_at or utc_now()
+            if started_at is not None:
+                effective_started_at = started_at
+            elif completed_at is not None and latency_ms is not None:
+                effective_started_at = completed_at - timedelta(milliseconds=latency_ms)
+            else:
+                effective_started_at = utc_now()
+
             async with self.db_mgr.session() as session:
                 # 1. Ensure parent RequestRecord exists to satisfy FK constraint
                 req_stmt = select(RequestRecord).where(RequestRecord.request_id == request_id)
@@ -61,18 +69,29 @@ class UsageRepository:
                         final_provider=provider,
                         final_model=model,
                         status="success",
-                        started_at=started_at or utc_now(),
-                        completed_at=completed_at or utc_now(),
+                        started_at=effective_started_at,
+                        completed_at=effective_completed_at,
                         latency_ms=latency_ms,
                     )
                     session.add(req)
                     await session.flush()
                 else:
                     # Populate started_at, completed_at, and latency_ms if currently unset
-                    if req.started_at is None and started_at is not None:
-                        req.started_at = started_at
+                    if req.started_at is None:
+                        if started_at is not None:
+                            req.started_at = started_at
+                        elif req.completed_at is not None and (
+                            req.latency_ms is not None or latency_ms is not None
+                        ):
+                            l_ms = req.latency_ms if req.latency_ms is not None else latency_ms
+                            if l_ms is not None:
+                                req.started_at = req.completed_at - timedelta(milliseconds=l_ms)
+                        elif completed_at is not None and latency_ms is not None:
+                            req.started_at = completed_at - timedelta(milliseconds=latency_ms)
+                        else:
+                            req.started_at = effective_started_at
                     if req.completed_at is None:
-                        req.completed_at = completed_at or utc_now()
+                        req.completed_at = effective_completed_at
                     if req.latency_ms is None and latency_ms is not None:
                         req.latency_ms = latency_ms
 
