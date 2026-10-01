@@ -88,13 +88,23 @@ class CircuitBreakerManager:
     ) -> Any:
         """Execute a circuit operation against the active storage.
 
-        Falls back to local memory on Redis errors.
+        Falls back to local memory on Redis errors and marks Redis degraded.
         """
+        # If currently degraded, attempt a non-blocking throttled recovery probe
+        probe = getattr(self.redis_mgr, "probe_recovery", None)
+        if probe and not getattr(self.redis_mgr, "is_connected", False):
+            res = probe()
+            if hasattr(res, "__await__"):
+                await res
+
         active = self._get_active_storage()
         try:
             return await redis_op(active)
         except (RedisError, OSError, Exception) as exc:
             if active is not self._fallback_storage:
+                mark_disc = getattr(self.redis_mgr, "mark_disconnected", None)
+                if mark_disc:
+                    mark_disc()
                 logger.warning(
                     "Redis error during circuit breaker operation '%s': %s. "
                     "Failing back to in-memory circuit storage (process-local).",

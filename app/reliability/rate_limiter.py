@@ -105,9 +105,15 @@ class RateLimiter:
         server_member_id = f"{uuid4().hex}_{now_ms}"
         redis_key = f"ratelimit:{tenant_id}"
 
+        probe = getattr(self.redis_mgr, "probe_recovery", None)
+        if probe and not getattr(self.redis_mgr, "is_connected", False):
+            res = probe()
+            if hasattr(res, "__await__"):
+                await res
+
         redis_client = self.redis_mgr.get_client()
 
-        if redis_client is None or not self.redis_mgr.is_connected:
+        if redis_client is None or not getattr(self.redis_mgr, "is_connected", False):
             logger.warning(
                 "rate_limit.redis_unavailable: Redis is unreachable. "
                 "Failing open for tenant_id=%s (limit=%d, window=%ds)",
@@ -171,6 +177,7 @@ class RateLimiter:
         except RateLimitError:
             raise
         except (RedisError, OSError, Exception) as exc:
+            self.redis_mgr.mark_disconnected()
             logger.warning(
                 "rate_limit.redis_unavailable: Error executing rate limiter for tenant_id=%s: %s. "
                 "Failing open.",

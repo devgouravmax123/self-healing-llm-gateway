@@ -74,10 +74,17 @@ class Authenticator:
 
         Returns metadata dict if found and parsed, or None on miss, corruption, or Redis failure.
         """
+        probe = getattr(self.redis_mgr, "probe_recovery", None)
+        if probe and not getattr(self.redis_mgr, "is_connected", False):
+            res = probe()
+            if hasattr(res, "__await__"):
+                await res
+
+        client = self.redis_mgr.get_client()
+        if client is None:
+            return None
+
         try:
-            client = self.redis_mgr.get_client()
-            if client is None:
-                return None
             cache_key = f"{CACHE_KEY_PREFIX}{hashed_key}"
             data = await client.get(cache_key)
             if not data:
@@ -87,11 +94,17 @@ class Authenticator:
                 return parsed
             return None
         except Exception as exc:
+            mark_disc = getattr(self.redis_mgr, "mark_disconnected", None)
+            if mark_disc:
+                mark_disc()
             logger.debug("Redis read error for auth cache: %s", exc)
             return None
 
     async def _set_in_cache(self, hashed_key: str, payload: dict[str, Any]) -> None:
         """Attempt to write API key metadata to Redis cache with bounded TTL."""
+        if not self.redis_mgr.is_connected:
+            return
+
         try:
             client = self.redis_mgr.get_client()
             if client is None:
@@ -100,10 +113,14 @@ class Authenticator:
             ttl = self.config.api_key_cache_ttl_seconds
             await client.set(cache_key, json.dumps(payload), ex=ttl)
         except Exception as exc:
+            self.redis_mgr.mark_disconnected()
             logger.debug("Redis write error for auth cache: %s", exc)
 
     async def invalidate_cache(self, hashed_key: str) -> None:
         """Invalidate cached API key metadata in Redis."""
+        if not self.redis_mgr.is_connected:
+            return
+
         try:
             client = self.redis_mgr.get_client()
             if client is None:
@@ -111,6 +128,7 @@ class Authenticator:
             cache_key = f"{CACHE_KEY_PREFIX}{hashed_key}"
             await client.delete(cache_key)
         except Exception as exc:
+            self.redis_mgr.mark_disconnected()
             logger.warning("Failed to invalidate auth cache in Redis for key hash: %s", exc)
 
     async def revoke_api_key(self, api_key_id: UUID) -> bool:

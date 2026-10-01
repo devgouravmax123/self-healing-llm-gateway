@@ -1,8 +1,8 @@
-"""Async Redis connection manager with connection pooling and health checks."""
-
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from typing import Any
 
 from redis.asyncio.client import Redis
@@ -22,11 +22,73 @@ class RedisManager:
         self._pool: ConnectionPool[Any] | None = None
         self._client: Redis[Any] | None = None
         self._is_connected: bool = False
+        self._last_disconnect_time: float = 0.0
+        self._recovery_lock: asyncio.Lock = asyncio.Lock()
 
     @property
     def is_connected(self) -> bool:
         """Return whether Redis is currently reported as connected."""
         return self._is_connected
+
+    def mark_disconnected(self) -> None:
+        """Mark Redis connection as degraded/disconnected immediately.
+
+        Records the monotonic timestamp of disconnection. Safe to call repeatedly
+        from concurrent tasks without blocking or raising exceptions.
+        """
+        if self._is_connected:
+            logger.warning(
+                "Redis operational failure detected. Marking Redis disconnected "
+                "(switching to in-memory degraded mode)."
+            )
+        self._is_connected = False
+        self._last_disconnect_time = time.monotonic()
+
+    async def probe_recovery(self) -> bool:
+        """Attempt a throttled recovery probe to check if Redis is back online.
+
+        Uses asyncio.Lock to ensure only ONE probe runs concurrently across tasks.
+        Enforces a minimum cooldown interval (redis_reconnect_interval_seconds)
+        between consecutive probe attempts to prevent hammering dead Redis sockets.
+        Returns True if Redis is reachable and marked connected, False otherwise.
+        """
+        if self._is_connected:
+            return True
+
+        if self._client is None:
+            return False
+
+        # Enforce throttled cooldown interval using monotonic time
+        now = time.monotonic()
+        if (now - self._last_disconnect_time) < self.config.redis_reconnect_interval_seconds:
+            return False
+
+        # If a probe is already in progress, avoid queuing duplicate probes
+        if self._recovery_lock.locked():
+            return False
+
+        async with self._recovery_lock:
+            # Double-check conditions after acquiring lock
+            if self._is_connected:
+                return True
+            now = time.monotonic()
+            if (now - self._last_disconnect_time) < self.config.redis_reconnect_interval_seconds:
+                return False
+
+            # Update timestamp before probe to throttle subsequent checks even if this ping fails
+            self._last_disconnect_time = now
+            try:
+                res = await self._client.ping()
+                if res:
+                    self._is_connected = True
+                    logger.info("Redis recovery probe succeeded. Redis connection restored.")
+                    return True
+            except (RedisError, OSError, Exception) as exc:
+                logger.debug("Redis recovery probe failed: %s", exc)
+                self._is_connected = False
+                return False
+
+        return False
 
     async def initialize(self) -> bool:
         """Initialize the Redis connection pool and perform a bounded health check.
@@ -54,6 +116,7 @@ class RedisManager:
                 exc,
             )
             self._is_connected = False
+            self._last_disconnect_time = time.monotonic()
             return False
 
     def get_client(self) -> Redis[Any] | None:
@@ -77,6 +140,7 @@ class RedisManager:
         except (RedisError, OSError, Exception) as exc:
             logger.warning("Redis ping check failed: %s", exc)
             self._is_connected = False
+            self._last_disconnect_time = time.monotonic()
             return False
 
     async def close(self) -> None:

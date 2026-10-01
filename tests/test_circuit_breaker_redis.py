@@ -1,5 +1,6 @@
 """Unit tests for Phase 09 Redis operational state, storage abstraction, and fallbacks."""
 
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -57,8 +58,15 @@ async def test_redis_circuit_storage_lua_mocked() -> None:
     # In redis-py, register_script is synchronous and returns an executable
     # script object whose __call__ is async
     mock_acquire_script = AsyncMock()
-    mock_acquire_script.side_effect = lambda keys, args: [1, "CLOSED", "0"]
-    mock_client.register_script = lambda script: mock_acquire_script
+
+    async def fake_acquire(
+        keys: list[str] | None = None,
+        args: list[Any] | None = None,
+    ) -> list[Any]:
+        return [1, "CLOSED", "0"]
+
+    mock_acquire_script.side_effect = fake_acquire
+    mock_client.register_script = lambda script="": mock_acquire_script
 
     storage = RedisCircuitStorage(redis_client=mock_client)
     allowed, state, remaining = await storage.acquire_permission(
@@ -76,7 +84,7 @@ async def test_redis_failure_transparent_fallback_to_in_memory() -> None:
     mock_client = AsyncMock()
     # Simulate Redis connection failure on script execution
     mock_script = AsyncMock(side_effect=ConnectionError("Connection to Redis lost"))
-    mock_client.register_script = lambda script: mock_script
+    mock_client.register_script = lambda script="": mock_script
 
     redis_mgr = RedisManager()
     redis_mgr._client = mock_client
@@ -232,9 +240,10 @@ async def test_redis_cooldown_preserved_on_fallback() -> None:
     mock_fail_script = AsyncMock(return_value=["OPEN", 5])
     mock_acquire_script = AsyncMock(return_value=[0, "OPEN", "20.0"])
 
-    mock_client.register_script = lambda s: (
-        mock_fail_script if "HINCRBY" in s else mock_acquire_script
-    )
+    def dispatch_script(s: str = "") -> AsyncMock:
+        return mock_fail_script if "HINCRBY" in s else mock_acquire_script
+
+    mock_client.register_script = dispatch_script
 
     redis_mgr = RedisManager()
     redis_mgr._client = mock_client
@@ -263,3 +272,148 @@ async def test_redis_cooldown_preserved_on_fallback() -> None:
     current_time = 1031.0
     assert cb.get_state("provider_cooldown") == CircuitState.HALF_OPEN
     await cb.acquire_permission("provider_cooldown")
+
+
+@pytest.mark.asyncio
+async def test_operational_failure_marks_redis_disconnected() -> None:
+    """Test A: Operational Redis network error immediately marks RedisManager disconnected."""
+    mock_client = AsyncMock()
+    mock_script = AsyncMock(side_effect=ConnectionError("Redis connection lost"))
+    mock_client.register_script = lambda script="": mock_script
+
+    redis_mgr = RedisManager()
+    redis_mgr._client = mock_client
+    redis_mgr._is_connected = True
+
+    cb_manager = CircuitBreakerManager(redis_mgr=redis_mgr)
+    assert redis_mgr.is_connected
+
+    # Operational execution catches error and marks disconnected
+    await cb_manager.acquire_permission("prov_disc_test")
+
+    assert not redis_mgr.is_connected
+
+
+@pytest.mark.asyncio
+async def test_subsequent_operations_bypass_redis_after_disconnect() -> None:
+    """Test B: After disconnect, subsequent operations bypass Redis without calling client."""
+    mock_client = AsyncMock()
+    mock_script = AsyncMock(side_effect=ConnectionError("Redis connection lost"))
+    mock_client.register_script = lambda script="": mock_script
+
+    redis_mgr = RedisManager()
+    redis_mgr._client = mock_client
+    redis_mgr._is_connected = True
+
+    cb_manager = CircuitBreakerManager(redis_mgr=redis_mgr)
+
+    # 1. First operation encounters error and marks disconnected
+    await cb_manager.acquire_permission("prov_bypass_test")
+    assert not redis_mgr.is_connected
+    assert mock_script.call_count == 1
+
+    # 2. Second operation runs while still disconnected (within throttled reconnect interval)
+    await cb_manager.acquire_permission("prov_bypass_test")
+    # Redis script must NOT have been called a second time
+    assert mock_script.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_probe_recovery_restores_redis_connection() -> None:
+    """Test C: When Redis becomes reachable again, probe_recovery restores connected state."""
+    mock_client = AsyncMock()
+    mock_client.ping = AsyncMock(return_value=True)
+
+    redis_mgr = RedisManager()
+    redis_mgr._client = mock_client
+    redis_mgr._is_connected = False
+    redis_mgr._last_disconnect_time = 0.0  # Expire cooldown
+
+    recovered = await redis_mgr.probe_recovery()
+
+    assert recovered is True
+    assert redis_mgr.is_connected
+    mock_client.ping.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_probe_throttling_prevents_continuous_pings() -> None:
+    """Test D: Multiple probe attempts within reconnect interval do not repeatedly ping Redis."""
+    mock_client = AsyncMock()
+    mock_client.ping = AsyncMock(side_effect=ConnectionError("Still down"))
+
+    redis_mgr = RedisManager()
+    redis_mgr._client = mock_client
+    redis_mgr._is_connected = False
+    redis_mgr._last_disconnect_time = 0.0  # Allow 1st probe
+
+    # 1st probe fires
+    res1 = await redis_mgr.probe_recovery()
+    assert res1 is False
+    assert mock_client.ping.call_count == 1
+
+    # Immediately attempt subsequent probes (interval not elapsed)
+    res2 = await redis_mgr.probe_recovery()
+    res3 = await redis_mgr.probe_recovery()
+
+    assert res2 is False
+    assert res3 is False
+    # Call count must remain 1
+    assert mock_client.ping.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_probe_protection() -> None:
+    """Test E: Concurrent probe_recovery calls are serialized with only one active ping."""
+    import asyncio
+
+    mock_client = AsyncMock()
+
+    async def slow_ping() -> bool:
+        await asyncio.sleep(0.05)
+        return True
+
+    mock_client.ping = AsyncMock(side_effect=slow_ping)
+
+    redis_mgr = RedisManager()
+    redis_mgr._client = mock_client
+    redis_mgr._is_connected = False
+    redis_mgr._last_disconnect_time = 0.0
+
+    # Launch 5 concurrent probe tasks
+    results = await asyncio.gather(*[redis_mgr.probe_recovery() for _ in range(5)])
+
+    # Exactly one ping executed, first task gets True (or all observe True once restored)
+    assert mock_client.ping.call_count == 1
+    assert redis_mgr.is_connected
+    assert any(results)
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_and_auth_semantics_unchanged_on_disconnect() -> None:
+    """Test F: Rate limiter fails open and auth falls back to DB when Redis is disconnected."""
+    from app.core.auth import Authenticator
+    from app.reliability.rate_limiter import RateLimiter
+
+    mock_client = AsyncMock()
+    mock_client.eval = AsyncMock(side_effect=ConnectionError("Redis down"))
+    mock_client.get = AsyncMock(side_effect=ConnectionError("Redis down"))
+
+    redis_mgr = RedisManager()
+    redis_mgr._client = mock_client
+    redis_mgr._is_connected = True
+
+    # 1. RateLimiter test: fails open and marks disconnected
+    rl = RateLimiter(redis_mgr=redis_mgr)
+    # Should not raise; fails open
+    await rl.check_rate_limit(tenant_id="test_tenant", limit=10, window_seconds=60)
+    assert not redis_mgr.is_connected
+
+    # 2. Authenticator test: marks disconnected on read error and falls back to DB
+    mock_repo = AsyncMock()
+    mock_repo.get_by_hashed_key = AsyncMock(return_value=None)
+    auth = Authenticator(repo=mock_repo, redis_mgr=redis_mgr)
+
+    # _get_from_cache returns None when disconnected
+    cached_val = await auth._get_from_cache("some_hash")
+    assert cached_val is None

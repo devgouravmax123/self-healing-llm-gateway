@@ -23,6 +23,9 @@ class Settings(BaseSettings):
 
     # Storage and Provider URLs
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
+    redis_reconnect_interval_seconds: float = Field(
+        default=5.0, alias="REDIS_RECONNECT_INTERVAL_SECONDS"
+    )
     database_url: str = Field(
         default="postgresql+asyncpg://postgres:postgres@localhost:5432/llm_gateway",
         alias="DATABASE_URL",
