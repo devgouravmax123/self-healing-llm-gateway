@@ -532,7 +532,11 @@
         "multi": true,
         "name": "model",
         "options": [],
-        "query": { "query": "label_values(gateway_requests_total, model)", "refId": "PrometheusVariableRef" },
+        "query": {
+          "qryType": 1,
+          "query": "label_values(gateway_requests_total, model)",
+          "refId": "PrometheusVariableRef"
+        },
         "refresh": 2,
         "regex": "",
         "skipUrlSync": false,
@@ -549,7 +553,11 @@
         "multi": true,
         "name": "provider",
         "options": [],
-        "query": { "query": "label_values(gateway_provider_requests_total, provider)", "refId": "PrometheusVariableRef" },
+        "query": {
+          "qryType": 1,
+          "query": "label_values(gateway_provider_requests_total, provider)",
+          "refId": "PrometheusVariableRef"
+        },
         "refresh": 2,
         "regex": "",
         "skipUrlSync": false,

@@ -82,6 +82,7 @@ class TestMonitoringProvisioningFiles:
         assert len(datasources) >= 1
         prom_ds = next((ds for ds in datasources if ds.get("type") == "prometheus"), None)
         assert prom_ds is not None
+        assert prom_ds.get("uid") == "prometheus"
         assert prom_ds.get("isDefault") is True
 
     def test_grafana_dashboard_provisioning_valid(self) -> None:
@@ -182,3 +183,30 @@ class TestGrafanaDashboardDefinition:
             assert term not in raw_text, (
                 f"Forbidden sensitive term '{term}' found in dashboard JSON!"
             )
+
+    def test_dashboard_templating_variables_structure(self) -> None:
+        """Verify template variables conform to Grafana 11.x schema with qryType."""
+        dash_json = MONITORING_ROOT / "grafana" / "dashboards" / "llm-gateway-overview.json"
+        with open(dash_json, encoding="utf-8") as f:
+            data: dict[str, Any] = json.load(f)
+
+        assert "templating" in data
+        variables = data["templating"].get("list", [])
+        assert len(variables) == 2
+
+        var_names = {v.get("name") for v in variables}
+        assert var_names == {"model", "provider"}
+
+        for v in variables:
+            assert v.get("type") == "query"
+            assert v.get("includeAll") is True
+            assert v.get("multi") is True
+            assert v.get("datasource", {}).get("type") == "prometheus"
+            assert v.get("datasource", {}).get("uid") == "prometheus"
+            query = v.get("query")
+            assert isinstance(query, dict), "Template variable query must be a structured dict"
+            assert query.get("qryType") == 1, (
+                "Prometheus template variable query must have qryType=1 in Grafana 11.x"
+            )
+            assert "label_values(" in query.get("query", "")
+            assert "refId" in query
