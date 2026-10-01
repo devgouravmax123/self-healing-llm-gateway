@@ -163,3 +163,120 @@ def test_chat_completions_authenticated_executes_pipeline(monkeypatch: pytest.Mo
             key_prefix="gw_live_test",
             is_admin=False,
         )
+
+
+def test_postgres_outage_with_warm_redis_cache_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify that when PostgreSQL is down, a request with a valid cached API key succeeds (200)."""
+    import json
+
+    app.dependency_overrides.pop(get_authenticated_tenant, None)
+    try:
+        client = TestClient(app)
+
+        api_key_secret = "gw_live_testwarm_secret999"
+        api_key_id = uuid4()
+
+        # Warm Redis cache payload
+        cached_payload = json.dumps(
+            {
+                "tenant_id": "tenant_resilient",
+                "tenant_name": "Resilient Corp",
+                "tenant_status": "active",
+                "api_key_id": str(api_key_id),
+                "key_prefix": "gw_live_testwarm",
+                "is_admin": False,
+                "status": "active",
+                "expires_at": None,
+            }
+        )
+
+        # Mock Redis client returning warm cache
+        mock_redis_client = AsyncMock()
+        mock_redis_client.get = AsyncMock(return_value=cached_payload)
+        monkeypatch.setattr(authenticator.redis_mgr, "get_client", lambda: mock_redis_client)
+
+        # Mock PostgreSQL repository raising connection error
+        monkeypatch.setattr(
+            authenticator.repo,
+            "get_by_hashed_key",
+            AsyncMock(side_effect=RuntimeError("PostgreSQL connection refused")),
+        )
+
+        # Mock provider execution
+        expected_resp = ChatCompletionResponse(
+            id="chatcmpl-resilient",
+            model="qwen2.5:3b",
+            choices=[
+                ChatCompletionChoice(
+                    index=0,
+                    message=ChatCompletionMessageResponse(
+                        role="assistant", content="Resilience works!"
+                    ),
+                    finish_reason="stop",
+                )
+            ],
+            usage=CompletionUsage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+        )
+        mock_execute = AsyncMock(return_value=expected_resp)
+        monkeypatch.setattr(failover_manager, "execute_with_failover", mock_execute)
+
+        payload = {
+            "model": "qwen2.5:3b",
+            "messages": [{"role": "user", "content": "Hello"}],
+        }
+        headers = {"Authorization": f"Bearer {api_key_secret}"}
+        response = client.post("/v1/chat/completions", json=payload, headers=headers)
+
+        assert response.status_code == 200
+        assert response.json()["choices"][0]["message"]["content"] == "Resilience works!"
+        assert mock_execute.called
+    finally:
+        app.dependency_overrides[get_authenticated_tenant] = lambda: TenantContext(
+            tenant_id="test_tenant_default",
+            tenant_name="Default Test Org",
+            api_key_id=uuid4(),
+            key_prefix="gw_live_test",
+            is_admin=False,
+        )
+
+
+def test_postgres_outage_with_cold_cache_returns_503(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify that when PostgreSQL is down and cache is empty/miss, gateway returns HTTP 503."""
+    app.dependency_overrides.pop(get_authenticated_tenant, None)
+    try:
+        client = TestClient(app)
+
+        api_key_secret = "gw_live_testcold_secret111"
+
+        # Mock Redis client returning cache miss
+        mock_redis_client = AsyncMock()
+        mock_redis_client.get = AsyncMock(return_value=None)
+        monkeypatch.setattr(authenticator.redis_mgr, "get_client", lambda: mock_redis_client)
+
+        # Mock PostgreSQL repository raising connection error
+        monkeypatch.setattr(
+            authenticator.repo,
+            "get_by_hashed_key",
+            AsyncMock(side_effect=RuntimeError("PostgreSQL connection refused")),
+        )
+
+        payload = {
+            "model": "qwen2.5:3b",
+            "messages": [{"role": "user", "content": "Hello"}],
+        }
+        headers = {"Authorization": f"Bearer {api_key_secret}"}
+        response = client.post("/v1/chat/completions", json=payload, headers=headers)
+
+        assert response.status_code == 503
+        data = response.json()
+        assert "error" in data
+        assert data["error"]["type"] == "GatewayError"
+        assert data["error"]["message"] == "Authentication service temporarily unavailable"
+    finally:
+        app.dependency_overrides[get_authenticated_tenant] = lambda: TenantContext(
+            tenant_id="test_tenant_default",
+            tenant_name="Default Test Org",
+            api_key_id=uuid4(),
+            key_prefix="gw_live_test",
+            is_admin=False,
+        )

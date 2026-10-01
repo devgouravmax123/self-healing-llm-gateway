@@ -1674,7 +1674,7 @@ FastAPI
 
 &#x20; ├── Generate/propagate request ID
 
-&#x20; ├── Identify tenant
+&#x20; ├── Identify tenant (Redis cache → PostgreSQL fallback)
 
 &#x20; ├── Check rate limit
 

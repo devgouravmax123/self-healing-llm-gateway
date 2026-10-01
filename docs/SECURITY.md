@@ -268,6 +268,28 @@ logger.info("API key = %s", api\_key)
 
 
 
+### Redis Authentication Cache Security
+
+
+
+When caching API-key metadata in Redis:
+
+\* Plaintext keys, passwords, and Authorization headers MUST NOT be cached.
+
+\* Cache key MUST be derived strictly from the deterministic hash (`api_key_cache:{sha256_hash}`).
+
+\* Cache TTL is strictly bounded (180s).
+
+\* On every cache hit, validate `status == "active"`, `tenant_status == "active"`, and `expires_at > utc_now()`.
+
+\* Expired keys MUST be rejected even if the cache TTL has not elapsed.
+
+\* Cache entry MUST be explicitly invalidated on key revocation.
+
+\* If PostgreSQL is unavailable and no valid cache exists, return HTTP 503 (NEVER fail open).
+
+
+
 \---
 
 

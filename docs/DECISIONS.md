@@ -103,10 +103,9 @@ REJECTED   → Considered but intentionally not selected
 | ADR-017 | Use PostgreSQL + SQLAlchemy + Alembic                        | ACCEPTED |
 
 | ADR-018 | Use Python 3.12 instead of targeting Python 3.14             | ACCEPTED |
-
 | ADR-019 | Develop incrementally instead of building everything at once | ACCEPTED |
-
 | ADR-020 | Treat documentation as the engineering source of truth       | ACCEPTED |
+| ADR-021 | Use Redis Read-Through Cache for API-Key Authentication      | ACCEPTED |
 
 
 
@@ -1746,9 +1745,61 @@ Update affected documentation
 
 &#x20;     ↓
 
-Implement
-
 ```
+
+
+
+---
+
+
+
+# ADR-021 — Use Redis Read-Through Cache for API-Key Authentication
+
+
+
+**Status:** ACCEPTED
+
+
+
+## Decision
+
+
+
+Use Redis to provide a short-lived, read-through authentication cache (`api_key_cache:{sha256_hash}`) with a bounded TTL (default 180 seconds).
+
+
+
+## Reason
+
+
+
+PostgreSQL is the durable source of truth for API keys and tenant records. However, querying PostgreSQL synchronously on every request made authentication vulnerable to total failure during transient database outages.
+
+
+
+By caching validated identity metadata (tenant identity, tenant status, key status, expiration) in Redis:
+
+* Active authenticated requests continue to succeed during PostgreSQL downtime.
+
+* PostgreSQL remains the authoritative store when available.
+
+* Cold misses during a database outage fail closed (HTTP 503 Service Unavailable).
+
+* Plaintext API keys and secrets are never stored in cache.
+
+
+
+## Invariants & Trade-offs
+
+* Cache TTL is strictly bounded (180s).
+
+* Key and tenant status (`status == "active"`, `tenant_status == "active"`, `expires_at > utc_now()`) are re-validated on every cache hit.
+
+* Key revocation invalidates the Redis cache entry immediately during normal operation.
+
+* During a database outage, revoked keys remain usable only until TTL expiry.
+
+* System never fails open.
 
 
 
@@ -1756,7 +1807,7 @@ Implement
 
 
 
-\# 4. Rejected Architectural Directions
+# 4. Rejected Architectural Directions
 
 
 

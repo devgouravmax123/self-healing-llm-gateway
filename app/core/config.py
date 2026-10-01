@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     default_tenant_rpm: int = Field(default=60, alias="DEFAULT_TENANT_RPM")
     rate_limit_window_seconds: int = Field(default=60, alias="RATE_LIMIT_WINDOW_SECONDS")
 
+    # Authentication Cache Configuration
+    api_key_cache_ttl_seconds: int = Field(default=180, alias="API_KEY_CACHE_TTL_SECONDS")
+
     # Observability: OpenTelemetry Configuration
     otel_enabled: bool = Field(default=True, alias="OTEL_ENABLED")
     otel_service_name: str = Field(default="self-healing-llm-gateway", alias="OTEL_SERVICE_NAME")
