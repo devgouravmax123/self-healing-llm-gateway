@@ -157,12 +157,13 @@ Exceptions from LiteLLM and HTTP transports are categorized with explicit retry 
 
 For retryable errors, delays are calculated using exponential backoff with a uniform random scaling factor:
 
-$$\text{base\_delay} = \min\left(\text{retry\_max\_delay},\; \text{retry\_base\_delay} \times 2^{\text{attempt}}\right)$$
-
-$$\text{delay} = \text{base\_delay} \times \text{Uniform}(0.5, 1.5)$$
+```text
+base_delay = min(retry_max_delay, retry_base_delay * (2 ** attempt))
+delay = base_delay * uniform(0.5, 1.5)
+```
 
 - Default configuration: `RETRY_BASE_DELAY = 0.5s`, `RETRY_MAX_DELAY = 5.0s`, `MAX_RETRIES = 2`.
-- Total attempts dispatched on a single provider before failover = $1 + \text{MAX\_RETRIES} = 3$ attempts.
+- Total attempts dispatched on a single provider before failover = `1 + MAX_RETRIES = 3` attempts.
 
 ### 3. Circuit Breaker State Machine
 
@@ -907,8 +908,3 @@ self-healing-llm-gateway/
 | **Product Requirements** | [`docs/PRD.md`](docs/PRD.md) | Core requirements and capabilities specification |
 | **Architecture Decisions** | [`docs/DECISIONS.md`](docs/DECISIONS.md) | Chronological record of architectural decisions (ADRs 1–20) |
 
----
-
-## 20. License
-
-This project is licensed under the MIT License. See `LICENSE` for details.
